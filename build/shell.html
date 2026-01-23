@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tank Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        .game-container {
+            text-align: center;
+        }
+        
+        h1 {
+            color: #eee;
+            margin-bottom: 20px;
+        }
+        
+        #canvas {
+            border: 2px solid #444;
+            border-radius: 4px;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .controls {
+            color: #888;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        
+        #status {
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        .emscripten {
+            padding-right: 0;
+            margin-left: auto;
+            margin-right: auto;
+            display: block;
+        }
+        
+        .spinner {
+            margin: 20px auto;
+            width: 50px;
+            height: 50px;
+            border: 3px solid #333;
+            border-top: 3px solid #00d4ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        #progress {
+            width: 300px;
+            height: 20px;
+            margin: 10px auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Tank Game</h1>
+        
+        <div class="spinner" id="spinner"></div>
+        <div id="status">Downloading...</div>
+        <progress id="progress" value="0" max="100" hidden></progress>
+        
+        <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+        
+        <div class="controls">
+            <p>Arrow Keys: Move | Mouse: Aim</p>
+        </div>
+    </div>
+
+    <script type='text/javascript'>
+        var Module = {
+            preRun: [],
+            postRun: [],
+            print: (function() {
+                return function(text) {
+                    if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                    console.log(text);
+                };
+            })(),
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                canvas.addEventListener("webglcontextlost", function(e) { 
+                    alert('WebGL context lost. Reload the page.'); 
+                    e.preventDefault(); 
+                }, false);
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+                if (text === Module.setStatus.last.text) return;
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+                if (m && now - Module.setStatus.last.time < 30) return;
+                Module.setStatus.last.time = now;
+                Module.setStatus.last.text = text;
+                if (m) {
+                    text = m[1];
+                    document.getElementById('progress').value = parseInt(m[2])*100;
+                    document.getElementById('progress').max = parseInt(m[4])*100;
+                    document.getElementById('progress').hidden = false;
+                } else {
+                    document.getElementById('progress').hidden = true;
+                }
+                document.getElementById('status').innerHTML = text;
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+        Module.setStatus('Downloading...');
+        window.onerror = function() {
+            Module.setStatus('Exception thrown, see JavaScript console');
+            document.getElementById('spinner').style.display = 'none';
+        };
+    </script>
+    {{{ SCRIPT }}}
+    <script>
+        // Hide spinner when game starts
+        Module.postRun.push(function() {
+            document.getElementById('spinner').style.display = 'none';
+            document.getElementById('status').style.display = 'none';
+        });
+    </script>
+</body>
+</html>

@@ -17,88 +17,93 @@
 #include <math.h>
 #include "raylib.h"
 
+#if defined(PLATFORM_WEB)
+    #include <emscripten/emscripten.h>
+#endif
+
+// Game state (needs to be accessible from UpdateDrawFrame)
+typedef struct {
+    Vector2 playerPos;
+    int score;
+    int tankSize;
+    int tankXSize;
+    int tankYSize;
+    int cannonXSize;
+    int cannonYSize;
+    Vector2 mousePosition;
+    float rot;
+    float tankFrontDegree;
+} GameState;
+
+static GameState game;
+static const int screenWidth = 800;
+static const int screenHeight = 450;
+
+void UpdateDrawFrame(void) {
+    // Input handling
+    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
+        game.playerPos.x -= 5;
+    }
+    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
+        game.playerPos.x += 5;
+    }
+    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
+        game.playerPos.y += 5;
+    }
+    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
+        game.playerPos.y -= 5;
+    }
+
+    Vector2 cannonBase = { game.playerPos.x, game.playerPos.y };
+    game.mousePosition = GetMousePosition();
+    float angleToMouse = atan2f(game.mousePosition.y - cannonBase.y, game.mousePosition.x - cannonBase.x) * RAD2DEG;
+
+    // Drawing
+    BeginDrawing();
+        ClearBackground(RAYWHITE);
+
+        DrawRectanglePro(
+            (Rectangle){game.playerPos.x, game.playerPos.y, game.tankXSize, game.tankYSize},
+            (Vector2){game.tankSize/2, game.tankSize/2},
+            0,
+            MAROON
+        );
+        DrawRectanglePro(
+            (Rectangle){ cannonBase.x, cannonBase.y, game.cannonXSize, game.cannonYSize },
+            (Vector2){ game.cannonXSize / 2, game.tankYSize / 2 },
+            angleToMouse,
+            GREEN
+        );
+
+    EndDrawing();
+}
+
 int main(void) {
-	const int screenWidth = 800;
-	const int screenHeight = 450;
+    InitWindow(screenWidth, screenHeight, "Tank Game");
 
-	InitWindow(screenWidth, screenHeight, "Tank Game");
+    // Initialize game state
+    game.playerPos = (Vector2){screenWidth/2, screenHeight/2};
+    game.score = 0;
+    game.tankSize = 80;
+    game.tankXSize = game.tankSize;
+    game.tankYSize = game.tankSize;
+    game.cannonXSize = 20;
+    game.cannonYSize = 100;
+    game.mousePosition = GetMousePosition();
+    game.rot = 0.0f;
+    game.tankFrontDegree = 0;
 
-	SetTargetFPS(60);
+#if defined(PLATFORM_WEB)
+    // For web, we need to let the browser control the main loop
+    emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
+#else
+    SetTargetFPS(60);
 
-	Vector2 playerPos = {0, 0};
-	int score = 0;
+    while (!WindowShouldClose()) {
+        UpdateDrawFrame();
+    }
+#endif
 
-	int tankSize = 80;
-	int tankXSize = tankSize;
-	int tankYSize = tankSize;
-	int cannonXSize = 20;
-	int cannonYSize = 100;
-
-	Vector2 mousePosition = GetMousePosition();
-
-	// rotation in degrees
-	float rot = 0.0f;
-
-	float tankFrontDegree = 0;
-
-	while (!WindowShouldClose()) {
-		// playerPos.x += 2;
-
-		if (IsKeyDown(KEY_LEFT)) {
-			playerPos.x -= 5;
-		}
-
-		if (IsKeyDown(KEY_RIGHT)) {
-			playerPos.x += 5;
-		}
-
-		if (IsKeyDown(KEY_DOWN)) {
-			playerPos.y += 5;
-		}
-
-		if (IsKeyDown(KEY_UP)) {
-			playerPos.y -= 5;
-		}
-
-		// float diffInX = playerPos.x - mousePosition.x;
-		// float diffInY = playerPos.y - mousePosition.y;
-		// float diffDegress = atan2f(diffInY, diffInX) * RAD2DEG;
-
-		Vector2 cannonBase = { playerPos.x, playerPos.y };
-		float angleToMouse = atan2f(mousePosition.y - cannonBase.y, mousePosition.x - cannonBase.x) * RAD2DEG;
-
-		// printf("diff in X: %f\n", diffInX);
-		// printf("diff in Y: %f\n", diffInY);
-		// printf("diff in deg: %f\n", diffDegress);
-
-		// rot += 10 * GetFrameTime();
-
-		mousePosition = GetMousePosition();
-
-		// printf("mousePosition X: %f\n", mousePosition.x);
-		// printf("mousePosition Y: %f\n", mousePosition.y);
-
-		BeginDrawing();
-			ClearBackground(RAYWHITE);
-
-			// DrawRectangle(playerPos.x, playerPos.y, tankXSize, tankYSize, MAROON);
-			// DrawRectangle(playerPos.x + (tankXSize/2 - cannonXSize/2), playerPos.y + tankYSize, cannonXSize, tankYSize, GREEN);
-			// DrawRectanglePro((Rectangle){playerPos.x + (tankXSize/2 - cannonXSize/2), playerPos.y + tankYSize, cannonXSize, tankYSize}, (Vector2){tankSize/2, tankSize/2}, angleToMouse, GREEN);
-			DrawRectanglePro((Rectangle){playerPos.x, playerPos.y, tankXSize, tankYSize}, (Vector2){tankSize/2, tankSize/2}, 0, MAROON);
-			DrawRectanglePro(
-    			(Rectangle){ cannonBase.x, cannonBase.y, cannonXSize, cannonYSize },
-    			(Vector2){ cannonXSize / 2, tankYSize / 2 },
-    			angleToMouse,
-    			GREEN
-			);
-
-
-			// DrawLineV(playerPos, mousePosition, LIGHTGRAY);
-
-		EndDrawing();
-	}
-
-	CloseWindow();
-
-	return 0;
+    CloseWindow();
+    return 0;
 }
