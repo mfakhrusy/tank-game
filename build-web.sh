@@ -27,41 +27,51 @@ fi
 
 echo "Building for Web (Emscripten)..."
 
-# Compile raylib for web (only the needed modules)
-emcc -c "$RAYLIB_SRC/rcore.c" -o bin/web/rcore.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+# Common compiler flags
+CFLAGS="-Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2"
+
+# Compile raylib modules
+echo "  Compiling raylib..."
+emcc -c "$RAYLIB_SRC/rcore.c" -o bin/web/rcore.o $CFLAGS \
     -I"$RAYLIB_SRC" -I"$RAYLIB_SRC/external/glfw/include"
 
-emcc -c "$RAYLIB_SRC/rshapes.c" -o bin/web/rshapes.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/rshapes.c" -o bin/web/rshapes.o $CFLAGS \
     -I"$RAYLIB_SRC"
 
-emcc -c "$RAYLIB_SRC/rtextures.c" -o bin/web/rtextures.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/rtextures.c" -o bin/web/rtextures.o $CFLAGS \
     -I"$RAYLIB_SRC" -I"$RAYLIB_SRC/external"
 
-emcc -c "$RAYLIB_SRC/rtext.c" -o bin/web/rtext.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/rtext.c" -o bin/web/rtext.o $CFLAGS \
     -I"$RAYLIB_SRC" -I"$RAYLIB_SRC/external"
 
-emcc -c "$RAYLIB_SRC/rmodels.c" -o bin/web/rmodels.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/rmodels.c" -o bin/web/rmodels.o $CFLAGS \
     -I"$RAYLIB_SRC" -I"$RAYLIB_SRC/external"
 
-emcc -c "$RAYLIB_SRC/raudio.c" -o bin/web/raudio.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/raudio.c" -o bin/web/raudio.o $CFLAGS \
     -I"$RAYLIB_SRC" -I"$RAYLIB_SRC/external"
 
-emcc -c "$RAYLIB_SRC/utils.c" -o bin/web/utils.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
+emcc -c "$RAYLIB_SRC/utils.c" -o bin/web/utils.o $CFLAGS \
     -I"$RAYLIB_SRC"
 
-# Compile game
-emcc -c src/main.c -o bin/web/main.o \
-    -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2 \
-    -I"$RAYLIB_SRC" -Iinclude
+# Compile game modules
+echo "  Compiling game..."
+emcc -c src/main.c -o bin/web/main.o $CFLAGS \
+    -I"$RAYLIB_SRC" -Isrc -Iinclude
+
+emcc -c src/game.c -o bin/web/game.o $CFLAGS \
+    -I"$RAYLIB_SRC" -Isrc -Iinclude
+
+emcc -c src/tank.c -o bin/web/tank.o $CFLAGS \
+    -I"$RAYLIB_SRC" -Isrc -Iinclude
+
+emcc -c src/parts.c -o bin/web/parts.o $CFLAGS \
+    -I"$RAYLIB_SRC" -Isrc -Iinclude
+
+emcc -c src/crafting.c -o bin/web/crafting.o $CFLAGS \
+    -I"$RAYLIB_SRC" -Isrc -Iinclude
 
 # Link everything together
+echo "  Linking..."
 emcc bin/web/*.o -o bin/web/index.html \
     -Os -Wall -DPLATFORM_WEB \
     -s USE_GLFW=3 \

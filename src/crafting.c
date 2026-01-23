@@ -1,0 +1,381 @@
+#include "crafting.h"
+#include "parts.h"
+#include "tank.h"
+#include <string.h>
+#include <stdio.h>
+
+#define PANEL_WIDTH      300
+#define SLOT_BUTTON_SIZE 60
+#define PART_LIST_HEIGHT 400
+
+typedef enum {
+    CRAFT_MODE_SLOTS,      /* Selecting a slot to modify */
+    CRAFT_MODE_PARTS,      /* Choosing a part for selected slot */
+    CRAFT_MODE_UPGRADE     /* Upgrading a part */
+} CraftMode;
+
+typedef struct {
+    bool is_open;
+    Tank *tank;
+    CraftMode mode;
+    PartSlot selected_slot;
+    int selected_part_index;
+    int scroll_offset;
+    float preview_rotation;
+} CraftingState;
+
+static CraftingState s_state = {0};
+
+void crafting_init(void)
+{
+    memset(&s_state, 0, sizeof(s_state));
+}
+
+void crafting_open(Tank *tank)
+{
+    s_state.is_open = true;
+    s_state.tank = tank;
+    s_state.mode = CRAFT_MODE_SLOTS;
+    s_state.selected_slot = SLOT_FRONT;
+    s_state.selected_part_index = -1;
+    s_state.scroll_offset = 0;
+    s_state.preview_rotation = 0.0f;
+}
+
+void crafting_close(void)
+{
+    s_state.is_open = false;
+    s_state.tank = NULL;
+}
+
+bool crafting_is_open(void)
+{
+    return s_state.is_open;
+}
+
+Tank *crafting_get_tank(void)
+{
+    return s_state.tank;
+}
+
+static Rectangle get_panel_rect(void)
+{
+    int screen_w = GetScreenWidth();
+    int screen_h = GetScreenHeight();
+    return (Rectangle){
+        screen_w - PANEL_WIDTH - 20,
+        20,
+        PANEL_WIDTH,
+        screen_h - 40
+    };
+}
+
+static Rectangle get_slot_button_rect(PartSlot slot)
+{
+    Rectangle panel = get_panel_rect();
+    float cx = panel.x + panel.width * 0.5f;
+    float cy = panel.y + 150.0f;
+    float offset = 70.0f;
+    
+    Vector2 pos;
+    switch (slot) {
+        case SLOT_FRONT: pos = (Vector2){cx + offset, cy}; break;
+        case SLOT_BACK:  pos = (Vector2){cx - offset, cy}; break;
+        case SLOT_LEFT:  pos = (Vector2){cx, cy - offset}; break;
+        case SLOT_RIGHT: pos = (Vector2){cx, cy + offset}; break;
+        case SLOT_TOP:   pos = (Vector2){cx, cy}; break;
+        default:         pos = (Vector2){cx, cy}; break;
+    }
+    
+    return (Rectangle){
+        pos.x - SLOT_BUTTON_SIZE * 0.5f,
+        pos.y - SLOT_BUTTON_SIZE * 0.5f,
+        SLOT_BUTTON_SIZE,
+        SLOT_BUTTON_SIZE
+    };
+}
+
+static const char *slot_name(PartSlot slot)
+{
+    switch (slot) {
+        case SLOT_FRONT: return "Front";
+        case SLOT_BACK:  return "Back";
+        case SLOT_LEFT:  return "Left";
+        case SLOT_RIGHT: return "Right";
+        case SLOT_TOP:   return "Top";
+        default:         return "?";
+    }
+}
+
+static Part *get_part_in_slot(Tank *tank, PartSlot slot)
+{
+    for (int i = 0; i < tank->part_count; i++) {
+        if (tank->parts[i].slot == slot) {
+            return &tank->parts[i];
+        }
+    }
+    return NULL;
+}
+
+void crafting_update(float dt)
+{
+    if (!s_state.is_open || !s_state.tank) {
+        return;
+    }
+    
+    s_state.preview_rotation += 30.0f * dt;
+    
+    Vector2 mouse = GetMousePosition();
+    bool clicked = IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+    
+    /* Handle ESC to go back or close */
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_TAB)) {
+        if (s_state.mode == CRAFT_MODE_SLOTS) {
+            crafting_close();
+        } else {
+            s_state.mode = CRAFT_MODE_SLOTS;
+        }
+        return;
+    }
+    
+    Rectangle panel = get_panel_rect();
+    
+    if (s_state.mode == CRAFT_MODE_SLOTS) {
+        /* Check slot button clicks */
+        for (int i = 0; i < SLOT_COUNT; i++) {
+            Rectangle btn = get_slot_button_rect((PartSlot)i);
+            if (CheckCollisionPointRec(mouse, btn) && clicked) {
+                s_state.selected_slot = (PartSlot)i;
+                s_state.mode = CRAFT_MODE_PARTS;
+                s_state.scroll_offset = 0;
+                break;
+            }
+        }
+    } 
+    else if (s_state.mode == CRAFT_MODE_PARTS) {
+        /* Part list area */
+        float list_y = panel.y + 250;
+        float item_height = 50;
+        int part_count = parts_get_count();
+        
+        /* Add "Remove Part" option at index -1 */
+        Part *existing = get_part_in_slot(s_state.tank, s_state.selected_slot);
+        int start_index = existing ? -1 : 0;
+        
+        for (int i = start_index; i < part_count; i++) {
+            float y = list_y + (i - start_index) * item_height - s_state.scroll_offset;
+            
+            if (y < panel.y + 240 || y > panel.y + panel.height - 60) {
+                continue;
+            }
+            
+            Rectangle item_rect = {panel.x + 10, y, panel.width - 20, item_height - 5};
+            
+            if (CheckCollisionPointRec(mouse, item_rect) && clicked) {
+                if (i == -1) {
+                    /* Remove existing part */
+                    tank_remove_part(s_state.tank, s_state.selected_slot);
+                } else {
+                    /* Remove old part if exists, add new */
+                    tank_remove_part(s_state.tank, s_state.selected_slot);
+                    Part new_part = parts_create(i, s_state.selected_slot);
+                    tank_attach_part(s_state.tank, new_part);
+                }
+                s_state.mode = CRAFT_MODE_SLOTS;
+                break;
+            }
+        }
+        
+        /* Scroll with mouse wheel */
+        float wheel = GetMouseWheelMove();
+        s_state.scroll_offset -= (int)(wheel * 30);
+        if (s_state.scroll_offset < 0) {
+            s_state.scroll_offset = 0;
+        }
+    }
+}
+
+static void draw_slot_buttons(void)
+{
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        PartSlot slot = (PartSlot)i;
+        Rectangle btn = get_slot_button_rect(slot);
+        
+        Part *part = get_part_in_slot(s_state.tank, slot);
+        Color bg_color = part ? DARKGREEN : DARKGRAY;
+        
+        if (slot == s_state.selected_slot && s_state.mode != CRAFT_MODE_SLOTS) {
+            bg_color = SKYBLUE;
+        }
+        
+        Vector2 mouse = GetMousePosition();
+        if (CheckCollisionPointRec(mouse, btn)) {
+            bg_color = ColorBrightness(bg_color, 0.3f);
+        }
+        
+        DrawRectangleRec(btn, bg_color);
+        DrawRectangleLinesEx(btn, 2, WHITE);
+        
+        /* Draw slot label */
+        const char *label = slot_name(slot);
+        int font_size = 12;
+        int text_w = MeasureText(label, font_size);
+        DrawText(label, 
+            (int)(btn.x + btn.width * 0.5f - text_w * 0.5f),
+            (int)(btn.y + btn.height * 0.5f - font_size * 0.5f),
+            font_size, WHITE);
+        
+        /* Show part name if equipped */
+        if (part) {
+            const PartDef *def = parts_get_def(part->def_id);
+            if (def) {
+                int name_w = MeasureText(def->name, 10);
+                DrawText(def->name,
+                    (int)(btn.x + btn.width * 0.5f - name_w * 0.5f),
+                    (int)(btn.y + btn.height + 2),
+                    10, LIGHTGRAY);
+            }
+        }
+    }
+}
+
+static void draw_parts_list(void)
+{
+    Rectangle panel = get_panel_rect();
+    float list_y = panel.y + 250;
+    float item_height = 50;
+    int part_count = parts_get_count();
+    
+    /* Header */
+    DrawText("Select Part:", (int)(panel.x + 10), (int)(panel.y + 220), 16, WHITE);
+    
+    /* Draw list background */
+    Rectangle list_bg = {panel.x + 5, list_y - 5, panel.width - 10, panel.height - 270};
+    DrawRectangleRec(list_bg, (Color){20, 20, 30, 200});
+    
+    Vector2 mouse = GetMousePosition();
+    
+    /* Check if part exists in slot (to show remove option) */
+    Part *existing = get_part_in_slot(s_state.tank, s_state.selected_slot);
+    int start_index = existing ? -1 : 0;
+    
+    BeginScissorMode((int)list_bg.x, (int)list_bg.y, 
+        (int)list_bg.width, (int)list_bg.height);
+    
+    for (int i = start_index; i < part_count; i++) {
+        float y = list_y + (i - start_index) * item_height - s_state.scroll_offset;
+        
+        Rectangle item_rect = {panel.x + 10, y, panel.width - 20, item_height - 5};
+        
+        bool hovered = CheckCollisionPointRec(mouse, item_rect);
+        Color item_bg = hovered ? (Color){60, 60, 80, 255} : (Color){40, 40, 50, 255};
+        DrawRectangleRec(item_rect, item_bg);
+        
+        if (i == -1) {
+            /* Remove option */
+            DrawText("[ Remove Part ]", (int)(item_rect.x + 10), 
+                (int)(item_rect.y + 8), 14, RED);
+            DrawText("Clear this slot", (int)(item_rect.x + 10),
+                (int)(item_rect.y + 26), 12, GRAY);
+        } else {
+            const PartDef *def = parts_get_def(i);
+            if (def) {
+                /* Part color indicator */
+                DrawRectangle((int)item_rect.x, (int)item_rect.y, 
+                    4, (int)item_rect.height, def->color);
+                
+                /* Part name */
+                DrawText(def->name, (int)(item_rect.x + 10), 
+                    (int)(item_rect.y + 8), 14, WHITE);
+                
+                /* Part type */
+                DrawText(parts_type_name(def->type), (int)(item_rect.x + 10),
+                    (int)(item_rect.y + 26), 12, GRAY);
+                
+                /* Quick stats */
+                char stats[64];
+                if (def->stat_bonus.damage > 0) {
+                    snprintf(stats, sizeof(stats), "DMG: %.0f", def->stat_bonus.damage);
+                } else if (def->stat_bonus.max_health > 0) {
+                    snprintf(stats, sizeof(stats), "HP: +%.0f", def->stat_bonus.max_health);
+                } else if (def->stat_bonus.move_speed > 0) {
+                    snprintf(stats, sizeof(stats), "SPD: +%.0f", def->stat_bonus.move_speed);
+                } else {
+                    stats[0] = '\0';
+                }
+                
+                int stats_w = MeasureText(stats, 12);
+                DrawText(stats, (int)(item_rect.x + item_rect.width - stats_w - 10),
+                    (int)(item_rect.y + 18), 12, LIME);
+            }
+        }
+    }
+    
+    EndScissorMode();
+}
+
+void crafting_draw(void)
+{
+    if (!s_state.is_open || !s_state.tank) {
+        return;
+    }
+    
+    /* Dim the background */
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), (Color){0, 0, 0, 100});
+    
+    /* Main panel */
+    Rectangle panel = get_panel_rect();
+    DrawRectangleRec(panel, (Color){30, 30, 40, 240});
+    DrawRectangleLinesEx(panel, 2, (Color){100, 100, 120, 255});
+    
+    /* Title */
+    const char *title = "CUSTOMIZE TANK";
+    int title_w = MeasureText(title, 20);
+    DrawText(title, (int)(panel.x + panel.width * 0.5f - title_w * 0.5f),
+        (int)(panel.y + 15), 20, WHITE);
+    
+    /* Mode-specific content */
+    if (s_state.mode == CRAFT_MODE_SLOTS || s_state.mode == CRAFT_MODE_PARTS) {
+        draw_slot_buttons();
+    }
+    
+    if (s_state.mode == CRAFT_MODE_PARTS) {
+        /* Show which slot we're editing */
+        char slot_text[64];
+        snprintf(slot_text, sizeof(slot_text), "Editing: %s Slot", 
+            slot_name(s_state.selected_slot));
+        DrawText(slot_text, (int)(panel.x + 10), (int)(panel.y + 200), 14, YELLOW);
+        
+        draw_parts_list();
+    }
+    
+    /* Stats display at bottom */
+    float stats_y = panel.y + panel.height - 120;
+    DrawLine((int)panel.x + 10, (int)stats_y - 10, 
+        (int)(panel.x + panel.width - 10), (int)stats_y - 10, GRAY);
+    
+    DrawText("STATS", (int)(panel.x + 10), (int)stats_y, 14, WHITE);
+    
+    Stats *s = &s_state.tank->current_stats;
+    char stat_buf[128];
+    
+    snprintf(stat_buf, sizeof(stat_buf), "Health: %.0f", s->max_health);
+    DrawText(stat_buf, (int)(panel.x + 10), (int)(stats_y + 20), 12, LIGHTGRAY);
+    
+    snprintf(stat_buf, sizeof(stat_buf), "Speed: %.0f", s->move_speed);
+    DrawText(stat_buf, (int)(panel.x + 10), (int)(stats_y + 35), 12, LIGHTGRAY);
+    
+    snprintf(stat_buf, sizeof(stat_buf), "Damage: %.0f", s->damage);
+    DrawText(stat_buf, (int)(panel.x + 150), (int)(stats_y + 20), 12, LIGHTGRAY);
+    
+    snprintf(stat_buf, sizeof(stat_buf), "Reload: %.1f/s", s->reload_speed);
+    DrawText(stat_buf, (int)(panel.x + 150), (int)(stats_y + 35), 12, LIGHTGRAY);
+    
+    /* Instructions */
+    const char *hint = s_state.mode == CRAFT_MODE_SLOTS 
+        ? "Click a slot to modify" 
+        : "ESC to go back";
+    int hint_w = MeasureText(hint, 12);
+    DrawText(hint, (int)(panel.x + panel.width * 0.5f - hint_w * 0.5f),
+        (int)(panel.y + panel.height - 25), 12, GRAY);
+}
