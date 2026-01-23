@@ -13,185 +13,92 @@
 *
 ********************************************************************************************/
 
-#include "raylib.h"
-#include "weapons.h"
+#include <stdio.h>
 #include <math.h>
+#include "raylib.h"
 
-typedef struct Projectile {
-    Vector2 position;
-    Vector2 direction;
-    float speed;
-    Color color;
-    float lifetime;
-} Projectile;
+int main(void) {
+	const int screenWidth = 800;
+	const int screenHeight = 450;
 
-typedef struct Tank {
-    Rectangle bounds;
-    Color color;
-    Weapon weapons[3];
-    int currentWeapon;
-    float fireTimer;
-} Tank;
+	InitWindow(screenWidth, screenHeight, "Tank Game");
 
-//------------------------------------------------------------------------------------
-// Program main entry point
-//------------------------------------------------------------------------------------
-int main(void)
-{
-    // Initialization
-    //--------------------------------------------------------------------------------------
-    const int screenWidth = 800;
-    const int screenHeight = 450;
+	SetTargetFPS(60);
 
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - input keys");
+	Vector2 playerPos = {0, 0};
+	int score = 0;
 
-    // Tank properties
-    Tank playerTank = {
-        .bounds = { screenWidth/2 - 20, screenHeight/2 - 20, 40, 40 },
-        .color = DARKGREEN,
-        .weapons = { WEAPON_MACHINE_GUN, WEAPON_SHOTGUN, WEAPON_CANNON },
-        .currentWeapon = 0,
-        .fireTimer = 0
-    };
-    
-    Projectile projectiles[100] = {0};
-    int projectileCount = 0;
-    
-    // Cannon properties
-    typedef struct Cannon {
-        Vector2 offset;
-        float angle;
-        float length;
-        Color color;
-    } Cannon;
-    
-    Cannon cannons[10] = {0};
-    int cannonCount = 0;
-    float currentAngle = 0.0f;
+	int tankSize = 80;
+	int tankXSize = tankSize;
+	int tankYSize = tankSize;
+	int cannonXSize = 20;
+	int cannonYSize = 100;
 
-    SetTargetFPS(60);               // Set our game to run at 60 frames-per-second
-    //--------------------------------------------------------------------------------------
+	Vector2 mousePosition = GetMousePosition();
 
-    // Main game loop
-    while (!WindowShouldClose())    // Detect window close button or ESC key
-    {
-        // Update
-        //----------------------------------------------------------------------------------
-        // Tank movement
-        if (IsKeyDown(KEY_RIGHT)) playerTank.bounds.x += 2.0f;
-        if (IsKeyDown(KEY_LEFT)) playerTank.bounds.x -= 2.0f;
-        if (IsKeyDown(KEY_UP)) playerTank.bounds.y -= 2.0f;
-        if (IsKeyDown(KEY_DOWN)) playerTank.bounds.y += 2.0f;
+	// rotation in degrees
+	float rot = 0.0f;
 
-        // Weapon switching
-        if (IsKeyPressed(KEY_Q)) {
-            playerTank.currentWeapon--;
-            if (playerTank.currentWeapon < 0) playerTank.currentWeapon = 2;
-        }
-        if (IsKeyPressed(KEY_E)) {
-            playerTank.currentWeapon++;
-            if (playerTank.currentWeapon > 2) playerTank.currentWeapon = 0;
-        }
+	float tankFrontDegree = 0;
 
-        // Update fire timer
-        Weapon currentWeapon = playerTank.weapons[playerTank.currentWeapon];
-        if (playerTank.fireTimer > 0) {
-            playerTank.fireTimer -= GetFrameTime();
-        }
-        
-        // Cannon rotation
-        if (IsKeyDown(KEY_A)) currentAngle -= 2.0f;
-        if (IsKeyDown(KEY_D)) currentAngle += 2.0f;
-        
-        // Fire projectiles
-        if (IsKeyDown(KEY_SPACE) && playerTank.fireTimer <= 0) {
-            Vector2 basePos = { 
-                playerTank.bounds.x + playerTank.bounds.width/2, 
-                playerTank.bounds.y + playerTank.bounds.height/2 
-            };
-            
-            for (int i = 0; i < currentWeapon.projectile_count; i++) {
-                float angle = currentAngle + (currentWeapon.spread_angle * (i - (currentWeapon.projectile_count-1)/2.0f));
-                Vector2 direction = {
-                    cos(DEG2RAD * angle),
-                    sin(DEG2RAD * angle)
-                };
-                
-                if (projectileCount < 100) {
-                    projectiles[projectileCount] = (Projectile){
-                        .position = basePos,
-                        .direction = direction,
-                        .speed = currentWeapon.projectile_speed,
-                        .color = currentWeapon.color,
-                        .lifetime = 2.0f
-                    };
-                    projectileCount++;
-                }
-            }
-            
-            playerTank.fireTimer = currentWeapon.fire_rate;
-        }
-        //----------------------------------------------------------------------------------
+	while (!WindowShouldClose()) {
+		// playerPos.x += 2;
 
-        // Draw
-        //----------------------------------------------------------------------------------
-        BeginDrawing();
+		if (IsKeyDown(KEY_LEFT)) {
+			playerPos.x -= 5;
+		}
 
-            ClearBackground(RAYWHITE);
+		if (IsKeyDown(KEY_RIGHT)) {
+			playerPos.x += 5;
+		}
 
-            // Draw tank
-            DrawRectangleRec(playerTank.bounds, playerTank.color);
+		if (IsKeyDown(KEY_DOWN)) {
+			playerPos.y += 5;
+		}
 
-            // Draw weapon
-            Vector2 basePos = { 
-                playerTank.bounds.x + playerTank.bounds.width/2, 
-                playerTank.bounds.y + playerTank.bounds.height/2 
-            };
-            Vector2 tipPos = {
-                basePos.x + cos(DEG2RAD*currentAngle) * 40,
-                basePos.y + sin(DEG2RAD*currentAngle) * 40
-            };
-            DrawLineEx(basePos, tipPos, 5, playerTank.weapons[playerTank.currentWeapon].color);
+		if (IsKeyDown(KEY_UP)) {
+			playerPos.y -= 5;
+		}
 
-            // Draw projectiles
-            for (int i = 0; i < projectileCount; i++) {
-                DrawCircleV(projectiles[i].position, 3, projectiles[i].color);
-                projectiles[i].position.x += projectiles[i].direction.x * projectiles[i].speed;
-                projectiles[i].position.y += projectiles[i].direction.y * projectiles[i].speed;
-                projectiles[i].lifetime -= GetFrameTime();
-                
-                if (projectiles[i].lifetime <= 0) {
-                    projectiles[i] = projectiles[projectileCount - 1];
-                    projectileCount--;
-                    i--;
-                }
-            }
-            
-            // Draw UI
-            DrawText(TextFormat("Current Weapon: %s", currentWeapon.name), 10, 40, 20, DARKGRAY);
-            DrawText(TextFormat("Fire Rate: %.1f/s", 1.0f/currentWeapon.fire_rate), 10, 70, 20, DARKGRAY);
-            DrawText(TextFormat("Damage: %d", currentWeapon.damage), 10, 100, 20, DARKGRAY);
-            
-            // Draw cannons
-            for (int i = 0; i < cannonCount; i++) {
-                Vector2 basePos = { playerTank.bounds.x + playerTank.bounds.width/2, playerTank.bounds.y + playerTank.bounds.height/2 };
-                Vector2 tipPos = {
-                    basePos.x + cos(DEG2RAD*cannons[i].angle) * cannons[i].length,
-                    basePos.y + sin(DEG2RAD*cannons[i].angle) * cannons[i].length
-                };
-                DrawLineEx(basePos, tipPos, 5, cannons[i].color);
-            }
-            
-            DrawText("ARROW KEYS: Move | A/D: Aim | SPACE: Fire | Q/E: Switch Weapons", 10, 10, 20, DARKGRAY);
+		// float diffInX = playerPos.x - mousePosition.x;
+		// float diffInY = playerPos.y - mousePosition.y;
+		// float diffDegress = atan2f(diffInY, diffInX) * RAD2DEG;
 
-        EndDrawing();
-        //----------------------------------------------------------------------------------
-    }
+		Vector2 cannonBase = { playerPos.x, playerPos.y };
+		float angleToMouse = atan2f(mousePosition.y - cannonBase.y, mousePosition.x - cannonBase.x) * RAD2DEG;
 
-    // De-Initialization
-    //--------------------------------------------------------------------------------------
-    CloseWindow();        // Close window and OpenGL context
-    //--------------------------------------------------------------------------------------
+		// printf("diff in X: %f\n", diffInX);
+		// printf("diff in Y: %f\n", diffInY);
+		// printf("diff in deg: %f\n", diffDegress);
 
-    return 0;
+		// rot += 10 * GetFrameTime();
+
+		mousePosition = GetMousePosition();
+
+		// printf("mousePosition X: %f\n", mousePosition.x);
+		// printf("mousePosition Y: %f\n", mousePosition.y);
+
+		BeginDrawing();
+			ClearBackground(RAYWHITE);
+
+			// DrawRectangle(playerPos.x, playerPos.y, tankXSize, tankYSize, MAROON);
+			// DrawRectangle(playerPos.x + (tankXSize/2 - cannonXSize/2), playerPos.y + tankYSize, cannonXSize, tankYSize, GREEN);
+			// DrawRectanglePro((Rectangle){playerPos.x + (tankXSize/2 - cannonXSize/2), playerPos.y + tankYSize, cannonXSize, tankYSize}, (Vector2){tankSize/2, tankSize/2}, angleToMouse, GREEN);
+			DrawRectanglePro((Rectangle){playerPos.x, playerPos.y, tankXSize, tankYSize}, (Vector2){tankSize/2, tankSize/2}, 0, MAROON);
+			DrawRectanglePro(
+    			(Rectangle){ cannonBase.x, cannonBase.y, cannonXSize, cannonYSize },
+    			(Vector2){ cannonXSize / 2, tankYSize / 2 },
+    			angleToMouse,
+    			GREEN
+			);
+
+
+			// DrawLineV(playerPos, mousePosition, LIGHTGRAY);
+
+		EndDrawing();
+	}
+
+	CloseWindow();
+
+	return 0;
 }
