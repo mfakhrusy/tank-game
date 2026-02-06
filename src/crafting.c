@@ -5,9 +5,30 @@
 #include <string.h>
 #include <stdio.h>
 
-#define PANEL_WIDTH      300
-#define SLOT_BUTTON_SIZE 60
-#define PART_LIST_HEIGHT 400
+typedef struct {
+    Rectangle panel;
+    float slot_button_size;
+    float slot_center_y;
+    float slot_offset;
+    float slot_name_offset_y;
+    float list_header_y;
+    float list_y;
+    float list_item_height;
+    float list_item_gap;
+    float list_side_pad;
+    float list_bg_pad;
+    Rectangle list_bg;
+    float list_clip_top;
+    float list_clip_bottom;
+    float stats_y;
+    float stats_line_offset;
+    float stats_row1_offset;
+    float stats_row2_offset;
+    float stats_right_column_offset;
+    float title_y;
+    float edit_label_y;
+    float hint_y;
+} CraftingLayout;
 
 typedef enum {
     CRAFT_MODE_SLOTS,      /* Selecting a slot to modify */
@@ -63,20 +84,66 @@ static Rectangle get_panel_rect(void)
 {
     int screen_w = GetScreenWidth();
     int screen_h = GetScreenHeight();
+    float scale = game_get_ui_scale();
+    float panel_margin = 20.0f * scale;
+    float panel_width = 300.0f * scale;
+    float max_panel_width = screen_w * 0.45f;
+    if (panel_width > max_panel_width) {
+        panel_width = max_panel_width;
+    }
     return (Rectangle){
-        screen_w - PANEL_WIDTH - 20,
-        20,
-        PANEL_WIDTH,
-        screen_h - 40
+        screen_w - panel_width - panel_margin,
+        panel_margin,
+        panel_width,
+        screen_h - panel_margin * 2.0f
     };
+}
+
+static CraftingLayout get_layout(void)
+{
+    float scale = game_get_ui_scale();
+    CraftingLayout layout = {0};
+
+    layout.panel = get_panel_rect();
+    layout.slot_button_size = 60.0f * scale;
+    layout.slot_center_y = layout.panel.y + 150.0f * scale;
+    layout.slot_offset = 70.0f * scale;
+    layout.slot_name_offset_y = 2.0f * scale;
+    layout.list_header_y = layout.panel.y + 220.0f * scale;
+    layout.list_y = layout.panel.y + 250.0f * scale;
+    layout.list_item_height = 50.0f * scale;
+    layout.list_item_gap = 5.0f * scale;
+    layout.list_side_pad = 10.0f * scale;
+    layout.list_bg_pad = 5.0f * scale;
+
+    float list_bottom_pad = 25.0f * scale;
+    layout.list_bg = (Rectangle){
+        layout.panel.x + layout.list_bg_pad,
+        layout.list_y - layout.list_bg_pad,
+        layout.panel.width - layout.list_bg_pad * 2.0f,
+        layout.panel.height - (layout.list_y - layout.panel.y) - list_bottom_pad
+    };
+    layout.list_clip_top = layout.list_y - 10.0f * scale;
+    layout.list_clip_bottom = layout.panel.y + layout.panel.height - 60.0f * scale;
+
+    layout.stats_y = layout.panel.y + layout.panel.height - 120.0f * scale;
+    layout.stats_line_offset = 10.0f * scale;
+    layout.stats_row1_offset = 20.0f * scale;
+    layout.stats_row2_offset = 35.0f * scale;
+    layout.stats_right_column_offset = 150.0f * scale;
+    layout.title_y = layout.panel.y + 15.0f * scale;
+    layout.edit_label_y = layout.panel.y + 200.0f * scale;
+    layout.hint_y = layout.panel.y + layout.panel.height - 25.0f * scale;
+
+    return layout;
 }
 
 static Rectangle get_slot_button_rect(PartSlot slot)
 {
-    Rectangle panel = get_panel_rect();
-    float cx = panel.x + panel.width * 0.5f;
-    float cy = panel.y + 150.0f;
-    float offset = 70.0f;
+    CraftingLayout layout = get_layout();
+    float cx = layout.panel.x + layout.panel.width * 0.5f;
+    float cy = layout.slot_center_y;
+    float offset = layout.slot_offset;
     
     Vector2 pos;
     switch (slot) {
@@ -89,10 +156,10 @@ static Rectangle get_slot_button_rect(PartSlot slot)
     }
     
     return (Rectangle){
-        pos.x - SLOT_BUTTON_SIZE * 0.5f,
-        pos.y - SLOT_BUTTON_SIZE * 0.5f,
-        SLOT_BUTTON_SIZE,
-        SLOT_BUTTON_SIZE
+        pos.x - layout.slot_button_size * 0.5f,
+        pos.y - layout.slot_button_size * 0.5f,
+        layout.slot_button_size,
+        layout.slot_button_size
     };
 }
 
@@ -139,7 +206,8 @@ void crafting_update(float dt)
         return;
     }
     
-    Rectangle panel = get_panel_rect();
+    CraftingLayout layout = get_layout();
+    Rectangle panel = layout.panel;
     
     if (s_state.mode == CRAFT_MODE_SLOTS) {
         /* Check slot button clicks */
@@ -155,8 +223,10 @@ void crafting_update(float dt)
     } 
     else if (s_state.mode == CRAFT_MODE_PARTS) {
         /* Part list area */
-        float list_y = panel.y + 250;
-        float item_height = 50;
+        float list_y = layout.list_y;
+        float item_height = layout.list_item_height;
+        float item_gap = layout.list_item_gap;
+        float list_side_pad = layout.list_side_pad;
         int part_count = parts_get_count();
         
         /* Add "Remove Part" option at index -1 */
@@ -166,11 +236,16 @@ void crafting_update(float dt)
         for (int i = start_index; i < part_count; i++) {
             float y = list_y + (i - start_index) * item_height - s_state.scroll_offset;
             
-            if (y < panel.y + 240 || y > panel.y + panel.height - 60) {
+            if (y < layout.list_clip_top || y > layout.list_clip_bottom) {
                 continue;
             }
-            
-            Rectangle item_rect = {panel.x + 10, y, panel.width - 20, item_height - 5};
+
+            Rectangle item_rect = {
+                panel.x + list_side_pad,
+                y,
+                panel.width - list_side_pad * 2.0f,
+                item_height - item_gap
+            };
             
             if (CheckCollisionPointRec(mouse, item_rect) && clicked) {
                 if (i == -1) {
@@ -189,7 +264,7 @@ void crafting_update(float dt)
         
         /* Scroll with mouse wheel */
         float wheel = GetMouseWheelMove();
-        s_state.scroll_offset -= (int)(wheel * 30);
+        s_state.scroll_offset -= (int)(wheel * (30.0f * game_get_ui_scale()));
         if (s_state.scroll_offset < 0) {
             s_state.scroll_offset = 0;
         }
@@ -198,6 +273,8 @@ void crafting_update(float dt)
 
 static void draw_slot_buttons(void)
 {
+    CraftingLayout layout = get_layout();
+
     for (int i = 0; i < SLOT_COUNT; i++) {
         PartSlot slot = (PartSlot)i;
         Rectangle btn = get_slot_button_rect(slot);
@@ -238,7 +315,7 @@ static void draw_slot_buttons(void)
                 DrawTextEx(font, def->name,
                     (Vector2){
                         btn.x + btn.width * 0.5f - name_dims.x * 0.5f,
-                        btn.y + btn.height + 2
+                        btn.y + btn.height + layout.slot_name_offset_y
                     },
                     (float)name_size, 1.0f, LIGHTGRAY);
             }
@@ -248,20 +325,22 @@ static void draw_slot_buttons(void)
 
 static void draw_parts_list(void)
 {
-    Rectangle panel = get_panel_rect();
-    float list_y = panel.y + 250;
-    float item_height = 50;
+    CraftingLayout layout = get_layout();
+    Rectangle panel = layout.panel;
+    float list_y = layout.list_y;
+    float item_height = layout.list_item_height;
+    float item_gap = layout.list_item_gap;
+    float list_side_pad = layout.list_side_pad;
     int part_count = parts_get_count();
     
     /* Header */
     Font font = game_get_ui_font();
     int header_size = (int)(16.0f * game_get_ui_scale() + 0.5f);
-    DrawTextEx(font, "Select Part:", (Vector2){panel.x + 10, panel.y + 220},
+    DrawTextEx(font, "Select Part:", (Vector2){panel.x + list_side_pad, layout.list_header_y},
         (float)header_size, 1.0f, WHITE);
-    
+
     /* Draw list background */
-    Rectangle list_bg = {panel.x + 5, list_y - 5, panel.width - 10, panel.height - 270};
-    DrawRectangleRec(list_bg, (Color){20, 20, 30, 200});
+    DrawRectangleRec(layout.list_bg, (Color){20, 20, 30, 200});
     
     Vector2 mouse = GetMousePosition();
     
@@ -269,13 +348,18 @@ static void draw_parts_list(void)
     Part *existing = get_part_in_slot(s_state.tank, s_state.selected_slot);
     int start_index = existing ? -1 : 0;
     
-    BeginScissorMode((int)list_bg.x, (int)list_bg.y, 
-        (int)list_bg.width, (int)list_bg.height);
+    BeginScissorMode((int)layout.list_bg.x, (int)layout.list_bg.y,
+        (int)layout.list_bg.width, (int)layout.list_bg.height);
     
     for (int i = start_index; i < part_count; i++) {
         float y = list_y + (i - start_index) * item_height - s_state.scroll_offset;
         
-        Rectangle item_rect = {panel.x + 10, y, panel.width - 20, item_height - 5};
+        Rectangle item_rect = {
+            panel.x + list_side_pad,
+            y,
+            panel.width - list_side_pad * 2.0f,
+            item_height - item_gap
+        };
         
         bool hovered = CheckCollisionPointRec(mouse, item_rect);
         Color item_bg = hovered ? (Color){60, 60, 80, 255} : (Color){40, 40, 50, 255};
@@ -339,23 +423,24 @@ void crafting_draw(void)
     if (!s_state.is_open || !s_state.tank) {
         return;
     }
+
+    CraftingLayout layout = get_layout();
     
     /* Dim the background */
     DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), (Color){0, 0, 0, 100});
     
     /* Main panel */
-    Rectangle panel = get_panel_rect();
+    Rectangle panel = layout.panel;
     DrawRectangleRec(panel, (Color){30, 30, 40, 240});
     DrawRectangleLinesEx(panel, 2, (Color){100, 100, 120, 255});
     
     /* Title */
     const char *title = "CUSTOMIZE TANK";
-    int title_w = MeasureText(title, 20);
     Font font = game_get_ui_font();
     int title_size = (int)(20.0f * game_get_ui_scale() + 0.5f);
     Vector2 title_dims = MeasureTextEx(font, title, (float)title_size, 1.0f);
     DrawTextEx(font, title,
-        (Vector2){panel.x + panel.width * 0.5f - title_dims.x * 0.5f, panel.y + 15},
+        (Vector2){panel.x + panel.width * 0.5f - title_dims.x * 0.5f, layout.title_y},
         (float)title_size, 1.0f, WHITE);
     
     /* Mode-specific content */
@@ -369,19 +454,20 @@ void crafting_draw(void)
         snprintf(slot_text, sizeof(slot_text), "Editing: %s Slot", 
             slot_name(s_state.selected_slot));
         int slot_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
-        DrawTextEx(font, slot_text, (Vector2){panel.x + 10, panel.y + 200},
+        DrawTextEx(font, slot_text, (Vector2){panel.x + layout.list_side_pad, layout.edit_label_y},
             (float)slot_size, 1.0f, YELLOW);
         
         draw_parts_list();
     }
     
     /* Stats display at bottom */
-    float stats_y = panel.y + panel.height - 120;
-    DrawLine((int)panel.x + 10, (int)stats_y - 10, 
-        (int)(panel.x + panel.width - 10), (int)stats_y - 10, GRAY);
+    float stats_y = layout.stats_y;
+    DrawLine((int)panel.x + (int)layout.list_side_pad, (int)stats_y - (int)layout.stats_line_offset,
+        (int)(panel.x + panel.width - layout.list_side_pad),
+        (int)stats_y - (int)layout.stats_line_offset, GRAY);
     
     int stats_title_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
-    DrawTextEx(font, "STATS", (Vector2){panel.x + 10, stats_y},
+    DrawTextEx(font, "STATS", (Vector2){panel.x + layout.list_side_pad, stats_y},
         (float)stats_title_size, 1.0f, WHITE);
     
     Stats *s = &s_state.tank->current_stats;
@@ -389,19 +475,23 @@ void crafting_draw(void)
     
     snprintf(stat_buf, sizeof(stat_buf), "Health: %.0f", s->max_health);
     int stats_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
-    DrawTextEx(font, stat_buf, (Vector2){panel.x + 10, stats_y + 20},
+    DrawTextEx(font, stat_buf,
+        (Vector2){panel.x + layout.list_side_pad, stats_y + layout.stats_row1_offset},
         (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Speed: %.0f", s->move_speed);
-    DrawTextEx(font, stat_buf, (Vector2){panel.x + 10, stats_y + 35},
+    DrawTextEx(font, stat_buf,
+        (Vector2){panel.x + layout.list_side_pad, stats_y + layout.stats_row2_offset},
         (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Damage: %.0f", s->damage);
-    DrawTextEx(font, stat_buf, (Vector2){panel.x + 150, stats_y + 20},
+    DrawTextEx(font, stat_buf,
+        (Vector2){panel.x + layout.stats_right_column_offset, stats_y + layout.stats_row1_offset},
         (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Reload: %.1f/s", s->reload_speed);
-    DrawTextEx(font, stat_buf, (Vector2){panel.x + 150, stats_y + 35},
+    DrawTextEx(font, stat_buf,
+        (Vector2){panel.x + layout.stats_right_column_offset, stats_y + layout.stats_row2_offset},
         (float)stats_size, 1.0f, LIGHTGRAY);
     
     /* Instructions */
@@ -412,6 +502,6 @@ void crafting_draw(void)
     Vector2 hint_dims = MeasureTextEx(font, hint, (float)hint_size, 1.0f);
     DrawTextEx(font, hint,
         (Vector2){panel.x + panel.width * 0.5f - hint_dims.x * 0.5f,
-            panel.y + panel.height - 25},
+            layout.hint_y},
         (float)hint_size, 1.0f, GRAY);
 }
