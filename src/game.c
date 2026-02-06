@@ -7,6 +7,14 @@
 
 static GameScene s_current_scene = SCENE_GAME;
 static Camera2D s_camera = {0};
+static Font s_ui_font = {0};
+
+static int scale_ui_size(int base_size)
+{
+    float scale = game_get_ui_scale();
+    int scaled = (int)((float)base_size * scale + 0.5f);
+    return scaled < base_size ? base_size : scaled;
+}
 
 /* Grid drawing for the game area */
 static void draw_grid(void)
@@ -38,6 +46,11 @@ void game_init(void)
     parts_init();
     tank_system_init();
     crafting_init();
+
+    s_ui_font = LoadFontEx("resources/fonts/anonymous_pro_bold.ttf", 48, NULL, 0);
+    if (s_ui_font.texture.id == 0) {
+        s_ui_font = GetFontDefault();
+    }
     
     /* Create player tank at center */
     Tank *player = tank_create((Vector2){0, 0}, true);
@@ -62,7 +75,9 @@ void game_init(void)
 
 void game_shutdown(void)
 {
-    /* Cleanup if needed */
+    if (s_ui_font.texture.id != 0 && s_ui_font.texture.id != GetFontDefault().texture.id) {
+        UnloadFont(s_ui_font);
+    }
 }
 
 static InputState get_input(void)
@@ -161,17 +176,44 @@ void game_draw(void)
         crafting_draw();
     } else {
         /* HUD when not crafting */
-        DrawText("TAB or E: Customize Tank", 10, 10, 16, DARKGRAY);
-        DrawText("WASD: Move | Mouse: Aim", 10, 30, 14, GRAY);
+        Font font = game_get_ui_font();
+        int title_size = scale_ui_size(16);
+        int hint_size = scale_ui_size(14);
+        DrawTextEx(font, "TAB or E: Customize Tank", (Vector2){10, 10},
+            (float)title_size, 1.0f, DARKGRAY);
+        DrawTextEx(font, "WASD: Move | Mouse: Aim", (Vector2){10, 10 + title_size + 4},
+            (float)hint_size, 1.0f, GRAY);
         
         /* Show current stats */
         Tank *player = tank_get_player();
         if (player) {
             char buf[64];
             snprintf(buf, sizeof(buf), "Parts: %d", player->part_count);
-            DrawText(buf, 10, GetScreenHeight() - 30, 14, DARKGRAY);
+            DrawTextEx(font, buf, (Vector2){10, (float)GetScreenHeight() - hint_size - 10},
+                (float)hint_size, 1.0f, DARKGRAY);
         }
     }
+}
+
+Font game_get_ui_font(void)
+{
+    return s_ui_font;
+}
+
+float game_get_ui_scale(void)
+{
+    const float base_w = 1920.0f;
+    const float base_h = 1080.0f;
+    float scale_w = (float)GetScreenWidth() / base_w;
+    float scale_h = (float)GetScreenHeight() / base_h;
+    float scale = fminf(scale_w, scale_h);
+    if (scale < 1.0f) {
+        return 1.0f;
+    }
+    if (scale > 1.5f) {
+        return 1.5f;
+    }
+    return scale;
 }
 
 GameScene game_get_scene(void)

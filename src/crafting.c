@@ -1,6 +1,7 @@
 #include "crafting.h"
 #include "parts.h"
 #include "tank.h"
+#include "game.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -218,22 +219,28 @@ static void draw_slot_buttons(void)
         
         /* Draw slot label */
         const char *label = slot_name(slot);
-        int font_size = 12;
-        int text_w = MeasureText(label, font_size);
-        DrawText(label, 
-            (int)(btn.x + btn.width * 0.5f - text_w * 0.5f),
-            (int)(btn.y + btn.height * 0.5f - font_size * 0.5f),
-            font_size, WHITE);
+        int font_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+        Font font = game_get_ui_font();
+        Vector2 label_size = MeasureTextEx(font, label, (float)font_size, 1.0f);
+        DrawTextEx(font, label,
+            (Vector2){
+                btn.x + btn.width * 0.5f - label_size.x * 0.5f,
+                btn.y + btn.height * 0.5f - label_size.y * 0.5f
+            },
+            (float)font_size, 1.0f, WHITE);
         
         /* Show part name if equipped */
         if (part) {
             const PartDef *def = parts_get_def(part->def_id);
             if (def) {
-                int name_w = MeasureText(def->name, 10);
-                DrawText(def->name,
-                    (int)(btn.x + btn.width * 0.5f - name_w * 0.5f),
-                    (int)(btn.y + btn.height + 2),
-                    10, LIGHTGRAY);
+                int name_size = (int)(10.0f * game_get_ui_scale() + 0.5f);
+                Vector2 name_dims = MeasureTextEx(font, def->name, (float)name_size, 1.0f);
+                DrawTextEx(font, def->name,
+                    (Vector2){
+                        btn.x + btn.width * 0.5f - name_dims.x * 0.5f,
+                        btn.y + btn.height + 2
+                    },
+                    (float)name_size, 1.0f, LIGHTGRAY);
             }
         }
     }
@@ -247,7 +254,10 @@ static void draw_parts_list(void)
     int part_count = parts_get_count();
     
     /* Header */
-    DrawText("Select Part:", (int)(panel.x + 10), (int)(panel.y + 220), 16, WHITE);
+    Font font = game_get_ui_font();
+    int header_size = (int)(16.0f * game_get_ui_scale() + 0.5f);
+    DrawTextEx(font, "Select Part:", (Vector2){panel.x + 10, panel.y + 220},
+        (float)header_size, 1.0f, WHITE);
     
     /* Draw list background */
     Rectangle list_bg = {panel.x + 5, list_y - 5, panel.width - 10, panel.height - 270};
@@ -273,10 +283,12 @@ static void draw_parts_list(void)
         
         if (i == -1) {
             /* Remove option */
-            DrawText("[ Remove Part ]", (int)(item_rect.x + 10), 
-                (int)(item_rect.y + 8), 14, RED);
-            DrawText("Clear this slot", (int)(item_rect.x + 10),
-                (int)(item_rect.y + 26), 12, GRAY);
+            int remove_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
+            int sub_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+            DrawTextEx(font, "[ Remove Part ]", (Vector2){item_rect.x + 10, item_rect.y + 8},
+                (float)remove_size, 1.0f, RED);
+            DrawTextEx(font, "Clear this slot", (Vector2){item_rect.x + 10, item_rect.y + 26},
+                (float)sub_size, 1.0f, GRAY);
         } else {
             const PartDef *def = parts_get_def(i);
             if (def) {
@@ -285,12 +297,15 @@ static void draw_parts_list(void)
                     4, (int)item_rect.height, def->color);
                 
                 /* Part name */
-                DrawText(def->name, (int)(item_rect.x + 10), 
-                    (int)(item_rect.y + 8), 14, WHITE);
-                
+                int name_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
+                DrawTextEx(font, def->name, (Vector2){item_rect.x + 10, item_rect.y + 8},
+                    (float)name_size, 1.0f, WHITE);
+
                 /* Part type */
-                DrawText(parts_type_name(def->type), (int)(item_rect.x + 10),
-                    (int)(item_rect.y + 26), 12, GRAY);
+                int type_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+                DrawTextEx(font, parts_type_name(def->type),
+                    (Vector2){item_rect.x + 10, item_rect.y + 26},
+                    (float)type_size, 1.0f, GRAY);
                 
                 /* Quick stats */
                 char stats[64];
@@ -304,9 +319,14 @@ static void draw_parts_list(void)
                     stats[0] = '\0';
                 }
                 
-                int stats_w = MeasureText(stats, 12);
-                DrawText(stats, (int)(item_rect.x + item_rect.width - stats_w - 10),
-                    (int)(item_rect.y + 18), 12, LIME);
+                int stats_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+                Vector2 stats_dims = MeasureTextEx(font, stats, (float)stats_size, 1.0f);
+                DrawTextEx(font, stats,
+                    (Vector2){
+                        item_rect.x + item_rect.width - stats_dims.x - 10,
+                        item_rect.y + 18
+                    },
+                    (float)stats_size, 1.0f, LIME);
             }
         }
     }
@@ -331,8 +351,12 @@ void crafting_draw(void)
     /* Title */
     const char *title = "CUSTOMIZE TANK";
     int title_w = MeasureText(title, 20);
-    DrawText(title, (int)(panel.x + panel.width * 0.5f - title_w * 0.5f),
-        (int)(panel.y + 15), 20, WHITE);
+    Font font = game_get_ui_font();
+    int title_size = (int)(20.0f * game_get_ui_scale() + 0.5f);
+    Vector2 title_dims = MeasureTextEx(font, title, (float)title_size, 1.0f);
+    DrawTextEx(font, title,
+        (Vector2){panel.x + panel.width * 0.5f - title_dims.x * 0.5f, panel.y + 15},
+        (float)title_size, 1.0f, WHITE);
     
     /* Mode-specific content */
     if (s_state.mode == CRAFT_MODE_SLOTS || s_state.mode == CRAFT_MODE_PARTS) {
@@ -344,7 +368,9 @@ void crafting_draw(void)
         char slot_text[64];
         snprintf(slot_text, sizeof(slot_text), "Editing: %s Slot", 
             slot_name(s_state.selected_slot));
-        DrawText(slot_text, (int)(panel.x + 10), (int)(panel.y + 200), 14, YELLOW);
+        int slot_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
+        DrawTextEx(font, slot_text, (Vector2){panel.x + 10, panel.y + 200},
+            (float)slot_size, 1.0f, YELLOW);
         
         draw_parts_list();
     }
@@ -354,28 +380,38 @@ void crafting_draw(void)
     DrawLine((int)panel.x + 10, (int)stats_y - 10, 
         (int)(panel.x + panel.width - 10), (int)stats_y - 10, GRAY);
     
-    DrawText("STATS", (int)(panel.x + 10), (int)stats_y, 14, WHITE);
+    int stats_title_size = (int)(14.0f * game_get_ui_scale() + 0.5f);
+    DrawTextEx(font, "STATS", (Vector2){panel.x + 10, stats_y},
+        (float)stats_title_size, 1.0f, WHITE);
     
     Stats *s = &s_state.tank->current_stats;
     char stat_buf[128];
     
     snprintf(stat_buf, sizeof(stat_buf), "Health: %.0f", s->max_health);
-    DrawText(stat_buf, (int)(panel.x + 10), (int)(stats_y + 20), 12, LIGHTGRAY);
+    int stats_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+    DrawTextEx(font, stat_buf, (Vector2){panel.x + 10, stats_y + 20},
+        (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Speed: %.0f", s->move_speed);
-    DrawText(stat_buf, (int)(panel.x + 10), (int)(stats_y + 35), 12, LIGHTGRAY);
+    DrawTextEx(font, stat_buf, (Vector2){panel.x + 10, stats_y + 35},
+        (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Damage: %.0f", s->damage);
-    DrawText(stat_buf, (int)(panel.x + 150), (int)(stats_y + 20), 12, LIGHTGRAY);
+    DrawTextEx(font, stat_buf, (Vector2){panel.x + 150, stats_y + 20},
+        (float)stats_size, 1.0f, LIGHTGRAY);
     
     snprintf(stat_buf, sizeof(stat_buf), "Reload: %.1f/s", s->reload_speed);
-    DrawText(stat_buf, (int)(panel.x + 150), (int)(stats_y + 35), 12, LIGHTGRAY);
+    DrawTextEx(font, stat_buf, (Vector2){panel.x + 150, stats_y + 35},
+        (float)stats_size, 1.0f, LIGHTGRAY);
     
     /* Instructions */
     const char *hint = s_state.mode == CRAFT_MODE_SLOTS 
         ? "Click a slot to modify" 
         : "ESC to go back";
-    int hint_w = MeasureText(hint, 12);
-    DrawText(hint, (int)(panel.x + panel.width * 0.5f - hint_w * 0.5f),
-        (int)(panel.y + panel.height - 25), 12, GRAY);
+    int hint_size = (int)(12.0f * game_get_ui_scale() + 0.5f);
+    Vector2 hint_dims = MeasureTextEx(font, hint, (float)hint_size, 1.0f);
+    DrawTextEx(font, hint,
+        (Vector2){panel.x + panel.width * 0.5f - hint_dims.x * 0.5f,
+            panel.y + panel.height - 25},
+        (float)hint_size, 1.0f, GRAY);
 }
