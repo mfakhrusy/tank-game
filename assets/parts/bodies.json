@@ -1,0 +1,6 @@
+[
+  { "id": "scout", "name": "Scout Hull", "radius": 20, "hp": 60, "body_damage": 0.5, "max_barrels": 2, "module_slots": 1, "mass": 8 },
+  { "id": "standard", "name": "Standard Hull", "radius": 28, "hp": 100, "body_damage": 1.0, "max_barrels": 3, "module_slots": 2, "mass": 15 },
+  { "id": "heavy", "name": "Heavy Hull", "radius": 36, "hp": 160, "body_damage": 1.5, "max_barrels": 4, "module_slots": 2, "mass": 25 },
+  { "id": "fortress", "name": "Fortress Hull", "radius": 44, "hp": 220, "body_damage": 2.0, "max_barrels": 4, "module_slots": 3, "mass": 40 }
+]

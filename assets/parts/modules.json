@@ -1,0 +1,10 @@
+[
+  { "id": "cooling", "name": "Cooling Loop", "effects": { "reload_multiplier": 0.85 }, "mass": 3 },
+  { "id": "armor", "name": "Armor Plating", "effects": { "hp_bonus": 30, "speed_multiplier": 0.9 }, "mass": 5 },
+  { "id": "shield", "name": "Shield Generator", "effects": { "shield_hp": 20, "shield_regen": 1.0 }, "mass": 6 },
+  { "id": "ammo_feed", "name": "Ammo Feeder", "effects": { "reload_multiplier": 0.85 }, "mass": 4 },
+  { "id": "booster", "name": "Boost Thruster", "effects": { "speed_multiplier": 1.2 }, "mass": 3 },
+  { "id": "radar", "name": "Radar", "effects": { "view_range_multiplier": 1.3 }, "mass": 2 },
+  { "id": "nanites", "name": "Repair Nanites", "effects": { "hp_regen": 2.0 }, "mass": 5 },
+  { "id": "drone_bay", "name": "Drone Bay", "effects": { "drone_limit_bonus": 2 }, "mass": 8 }
+]

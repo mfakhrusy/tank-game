@@ -1,0 +1,11 @@
+{
+  "name": "Default",
+  "body": "standard",
+  "engine": "stock",
+  "barrels": [
+    { "part": "cannon", "angle": 0 }
+  ],
+  "modules": [
+    { "part": "cooling" }
+  ]
+}

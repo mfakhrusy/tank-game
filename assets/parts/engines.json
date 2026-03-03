@@ -1,0 +1,5 @@
+[
+  { "id": "stock", "name": "Stock Motor", "max_speed": 150, "acceleration": 0.8, "mass": 5 },
+  { "id": "turbo", "name": "Turbo Engine", "max_speed": 200, "acceleration": 1.2, "mass": 8 },
+  { "id": "diesel", "name": "Heavy Diesel", "max_speed": 120, "acceleration": 0.5, "mass": 4 }
+]

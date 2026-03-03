@@ -1,0 +1,9 @@
+[
+  { "id": "peashooter", "name": "Peashooter", "width": 10, "length": 24, "damage": 5, "reload_ms": 200, "bullet_speed": 400, "bullet_lifetime_ms": 1500, "bullet_count": 1, "spread": 0.0, "recoil": 0.2, "mass": 2 },
+  { "id": "cannon", "name": "Cannon", "width": 14, "length": 28, "damage": 15, "reload_ms": 500, "bullet_speed": 350, "bullet_lifetime_ms": 2000, "bullet_count": 1, "spread": 0.02, "recoil": 0.6, "mass": 4 },
+  { "id": "sniper", "name": "Sniper Barrel", "width": 8, "length": 40, "damage": 20, "reload_ms": 800, "bullet_speed": 600, "bullet_lifetime_ms": 3000, "bullet_count": 1, "spread": 0.0, "recoil": 0.3, "mass": 3 },
+  { "id": "shotgun", "name": "Shotgun", "width": 18, "length": 20, "damage": 3, "reload_ms": 700, "bullet_speed": 300, "bullet_lifetime_ms": 800, "bullet_count": 6, "spread": 0.15, "recoil": 1.0, "mass": 5 },
+  { "id": "minigun", "name": "Minigun", "width": 10, "length": 26, "damage": 3, "reload_ms": 80, "bullet_speed": 380, "bullet_lifetime_ms": 1200, "bullet_count": 1, "spread": 0.06, "recoil": 0.1, "mass": 5 },
+  { "id": "trapper", "name": "Trapper", "width": 16, "length": 22, "damage": 0, "reload_ms": 400, "bullet_speed": 200, "bullet_lifetime_ms": 5000, "bullet_count": 1, "spread": 0.0, "recoil": 0.1, "mass": 3 },
+  { "id": "drone_spawner", "name": "Drone Spawner", "width": 16, "length": 18, "damage": 8, "reload_ms": 1500, "bullet_speed": 0, "bullet_lifetime_ms": 0, "bullet_count": 1, "spread": 0.0, "recoil": 0.0, "mass": 6 }
+]
