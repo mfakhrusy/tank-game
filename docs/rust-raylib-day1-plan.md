@@ -67,11 +67,10 @@ Build only this:
 - A rectangle tank body that moves and rotates
 - Turret follows mouse
 - Left click shoots bullets
-- Keyboard selection for 3 part slots:
-  - chassis (`1` / `2`)
-  - weapon (`3` / `4`)
-  - module (`5` / `6`)
+- Keyboard shortcuts to swap body (`1`/`2`), engine (`3`/`4`), and cycle barrel types on existing placements (`5`/`6`)
 - Recompute stats when selection changes
+
+> Barrel placement (drag-to-snap on circle at 15° increments) is a day-2 feature; day-1 uses a default front barrel.
 
 Skip polished UI on day 1. Keep it text/debug overlay.
 
@@ -98,7 +97,7 @@ Skip polished UI on day 1. Keep it text/debug overlay.
 ]
 ```
 
-`assets/parts/weapons.json`
+`assets/parts/weapons.json` (renamed to `barrels.json` in the full system; see `docs/customization-system.md` for the complete barrel schema)
 
 ```json
 [
@@ -159,6 +158,8 @@ pub fn compose(chassis: &Chassis, weapon: &Weapon, module: &Module) -> FinalStat
 ```
 
 Keep this function deterministic and separate from rendering.
+
+> The full composition system supports multiple barrels at arbitrary snap-to-angle positions (15° increments) around the body circle. See `docs/customization-system.md` for the complete version.
 
 ### 7) Playtest checklist (with your kid)
 
