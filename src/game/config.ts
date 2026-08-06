@@ -1,81 +1,196 @@
-export type SlotType = 'cannon' | 'armor' | 'engine';
+export type PartKind = 'shooter' | 'mover' | 'shell' | 'gadget';
+export type MountIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type ShooterBehavior = 'popper' | 'bonker' | 'sprinkler' | 'boomerang' | 'wiggler' | 'splitter' | 'ricochet';
 
 export type Part = {
   id: string;
-  slot: SlotType;
+  kind: PartKind;
   name: string;
   kidLabel: string;
   description: string;
   icon: string;
   cost: number;
   color: number;
-  stats: Partial<TankStats>;
+  shape: 'barrel' | 'pod' | 'booster' | 'plate' | 'wheel' | 'orb' | 'spike';
+  behavior?: ShooterBehavior;
+  stats: Partial<PartStats>;
 };
 
-export type TankBuild = Record<SlotType, string> & { color: string };
-export type TankStats = {
-  speed: number;
-  acceleration: number;
+export type PartStats = {
+  speed: number; acceleration: number; armor: number; magnet: number; thrust: number; ramDamage: number;
+  damage: number; fireRate: number; projectileSpeed: number; projectileSize: number; spread: number; burst: number;
+};
+
+export type Attachment = {
+  uid: string;
+  partId: string;
+  mount: MountIndex;
+  layer: 0 | 1;
+};
+
+export type TankBuild = {
+  version: 2;
+  name: string;
+  color: string;
+  attachments: Attachment[];
+};
+
+export type WeaponSpec = {
+  uid: string;
+  mount: MountIndex;
+  layer: 0 | 1;
   damage: number;
   fireRate: number;
   projectileSpeed: number;
   projectileSize: number;
-  armor: number;
-  barrels: number;
   spread: number;
+  burst: number;
+  color: number;
+  behavior: ShooterBehavior;
 };
 
-export const MAX_BOLTS = 10;
+export type BoosterSpec = { uid: string; mount: MountIndex; layer: 0 | 1; thrust: number; color: number };
+
+export type TankStats = {
+  speed: number;
+  acceleration: number;
+  armor: number;
+  magnet: number;
+  weapons: WeaponSpec[];
+  boosters: BoosterSpec[];
+  ramDamage: number;
+};
+
+export const MAX_LAYERS = 2;
+export const WILD_BUILD_TARGET = 18;
+// Kept as a finite compatibility value so an older Workshop module can safely
+// finish a Vite hot reload. New code treats bolts as informational only.
+export const MAX_BOLTS = 64;
 
 export const PARTS: Part[] = [
-  { id: 'popper', slot: 'cannon', name: 'Popper', kidLabel: 'Fast & bouncy', description: 'Lots of little zippy shots.', icon: '●', cost: 2, color: 0x47b8e8, stats: { damage: 10, fireRate: 5, projectileSpeed: 480, projectileSize: 7, barrels: 1, spread: 0 } },
-  { id: 'bonker', slot: 'cannon', name: 'Bonker', kidLabel: 'Big boom', description: 'One huge, powerful ball.', icon: '⬤', cost: 4, color: 0xff725e, stats: { damage: 35, fireRate: 1.4, projectileSpeed: 330, projectileSize: 14, barrels: 1, spread: 0 } },
-  { id: 'twins', slot: 'cannon', name: 'Twins', kidLabel: 'Double trouble', description: 'Two shots fly out together.', icon: '●●', cost: 3, color: 0x936ee8, stats: { damage: 12, fireRate: 3, projectileSpeed: 430, projectileSize: 7, barrels: 2, spread: 0.12 } },
-  { id: 'cardboard', slot: 'armor', name: 'Cardboard', kidLabel: 'Quick & light', description: 'Light armor means fast driving.', icon: '◇', cost: 1, color: 0xf0ad4e, stats: { armor: 70, speed: 230 } },
-  { id: 'bubble', slot: 'armor', name: 'Bubble Shell', kidLabel: 'Safe & round', description: 'A bouncy shield for exploring.', icon: '◉', cost: 3, color: 0x58c995, stats: { armor: 130, speed: 195 } },
-  { id: 'brick', slot: 'armor', name: 'Brick Box', kidLabel: 'Super sturdy', description: 'Strong, chunky, and a bit slow.', icon: '▣', cost: 4, color: 0xe7658c, stats: { armor: 210, speed: 160 } },
-  { id: 'windup', slot: 'engine', name: 'Wind-up', kidLabel: 'Easy rider', description: 'Smooth and simple to steer.', icon: '⌁', cost: 1, color: 0xffce54, stats: { acceleration: 600 } },
-  { id: 'rocket', slot: 'engine', name: 'Rocket', kidLabel: 'Zoom zoom!', description: 'Fast starts and speedy turns.', icon: '▲', cost: 4, color: 0xff725e, stats: { acceleration: 1200, speed: 55 } },
-  { id: 'crawler', slot: 'engine', name: 'Crawler', kidLabel: 'Strong push', description: 'Heavy tracks with steady control.', icon: '∞', cost: 2, color: 0x6c7a89, stats: { acceleration: 850, speed: 15 } },
+  { id: 'popper', kind: 'shooter', name: 'Popper', kidLabel: 'Rapid straight shots', description: 'Pops out fast little pellets in a straight line.', icon: '●', cost: 2, color: 0x47b8e8, shape: 'barrel', behavior: 'popper', stats: { damage: 9, fireRate: 5.2, projectileSpeed: 520, projectileSize: 6, burst: 1, spread: 0 } },
+  { id: 'bonker', kind: 'shooter', name: 'Bonker', kidLabel: 'Heavy piercing ball', description: 'A slow giant ball that can bonk through two blocks.', icon: '⬤', cost: 4, color: 0xff725e, shape: 'barrel', behavior: 'bonker', stats: { damage: 34, fireRate: 1.15, projectileSpeed: 320, projectileSize: 14, burst: 1, spread: 0 } },
+  { id: 'sprinkler', kind: 'shooter', name: 'Sprinkler', kidLabel: 'Real three-way spray', description: 'Fires three separate pellets in a wide fan.', icon: '∴', cost: 3, color: 0x936ee8, shape: 'pod', behavior: 'sprinkler', stats: { damage: 7, fireRate: 2.4, projectileSpeed: 420, projectileSize: 6, burst: 3, spread: 0.2 } },
+  { id: 'boomer', kind: 'shooter', name: 'Boomerang', kidLabel: 'Flies out, comes back', description: 'A returning disc that can hit blocks on both trips.', icon: '↩', cost: 3, color: 0xf08a24, shape: 'pod', behavior: 'boomerang', stats: { damage: 16, fireRate: 1.35, projectileSpeed: 390, projectileSize: 11, burst: 1, spread: 0 } },
+  { id: 'wiggler', kind: 'shooter', name: 'Wiggler', kidLabel: 'S-curving shots', description: 'Its glowing pellets weave left and right through the yard.', icon: '〰', cost: 3, color: 0x30b27a, shape: 'pod', behavior: 'wiggler', stats: { damage: 11, fireRate: 2.2, projectileSpeed: 410, projectileSize: 8, burst: 1, spread: 0 } },
+  { id: 'splitter', kind: 'shooter', name: 'Splitter', kidLabel: 'One becomes three', description: 'The shell travels forward, then bursts into three smaller shots.', icon: '◆', cost: 4, color: 0xe7658c, shape: 'pod', behavior: 'splitter', stats: { damage: 13, fireRate: 1.4, projectileSpeed: 380, projectileSize: 11, burst: 1, spread: 0 } },
+  { id: 'ricochet', kind: 'shooter', name: 'Block Bouncer', kidLabel: 'Bounces off blocks', description: 'Square shots ricochet away after hitting a block.', icon: '◇', cost: 3, color: 0xf6c453, shape: 'barrel', behavior: 'ricochet', stats: { damage: 12, fireRate: 1.8, projectileSpeed: 440, projectileSize: 8, burst: 1, spread: 0 } },
+  { id: 'wheel', kind: 'mover', name: 'Zippy Wheel', kidLabel: 'More speed', description: 'Add several for a super-fast build.', icon: '◉', cost: 2, color: 0x30b27a, shape: 'wheel', stats: { speed: 32, acceleration: 120 } },
+  { id: 'rocket', kind: 'mover', name: 'Back Booster', kidLabel: 'Forward blast', description: 'Put it on the back socket to blast forward.', icon: '▲', cost: 3, color: 0xff725e, shape: 'booster', stats: { speed: 18, thrust: 520 } },
+  { id: 'twin-booster', kind: 'mover', name: 'Twin Booster', kidLabel: 'Double flames', description: 'A wide two-nozzle booster with a mighty push.', icon: '▲▲', cost: 4, color: 0x936ee8, shape: 'booster', stats: { speed: 28, thrust: 760 } },
+  { id: 'micro-booster', kind: 'mover', name: 'Micro Booster', kidLabel: 'Tiny side kick', description: 'A small booster for clever sideways movement.', icon: '›', cost: 2, color: 0x47b8e8, shape: 'booster', stats: { speed: 10, thrust: 300 } },
+  { id: 'crawler', kind: 'mover', name: 'Crawler Foot', kidLabel: 'Steady grip', description: 'Strong control for heavy builds.', icon: '∞', cost: 2, color: 0x6c7a89, shape: 'wheel', stats: { speed: 18, acceleration: 180 } },
+  { id: 'bubble', kind: 'shell', name: 'Bubble Plate', kidLabel: 'Soft shield', description: 'A round shield plate for any side.', icon: '◒', cost: 2, color: 0x58c995, shape: 'plate', stats: { armor: 40 } },
+  { id: 'brick', kind: 'shell', name: 'Brick Plate', kidLabel: 'Extra sturdy', description: 'A heavy plate that can be stacked.', icon: '▰', cost: 3, color: 0xe7658c, shape: 'plate', stats: { armor: 75, speed: -8 } },
+  { id: 'bumper', kind: 'shell', name: 'Bumper', kidLabel: 'Bouncy edge', description: 'A cheap little protective bumper.', icon: '◡', cost: 1, color: 0xf6c453, shape: 'plate', stats: { armor: 20 } },
+  { id: 'spike', kind: 'shell', name: 'Spike Crown', kidLabel: 'Crash damage', description: 'Sharp points that make ramming blocks much stronger.', icon: '✹', cost: 3, color: 0xff725e, shape: 'spike', stats: { armor: 18, ramDamage: 28 } },
+  { id: 'drill', kind: 'gadget', name: 'Crash Drill', kidLabel: 'Maximum ramming', description: 'A spinning-looking nose built to smash strong blocks.', icon: '▶', cost: 4, color: 0x936ee8, shape: 'spike', stats: { ramDamage: 45 } },
+  { id: 'magnet', kind: 'gadget', name: 'Block Magnet', kidLabel: 'Pulls prizes', description: 'A curious orb with future powers.', icon: 'U', cost: 2, color: 0x47b8e8, shape: 'orb', stats: { magnet: 60 } },
+  { id: 'lamp', kind: 'gadget', name: 'Happy Lamp', kidLabel: 'Just for fun', description: 'Glows because every build needs flair.', icon: '✦', cost: 1, color: 0xf6c453, shape: 'orb', stats: {} },
 ];
 
-export const DEFAULT_BUILD: TankBuild = { cannon: 'popper', armor: 'bubble', engine: 'windup', color: '#5b7cfa' };
+let uidCounter = 0;
+export function makeAttachment(partId: string, mount: MountIndex, layer: 0 | 1): Attachment {
+  uidCounter += 1;
+  return { uid: `part-${Date.now().toString(36)}-${uidCounter}`, partId, mount, layer };
+}
+
+export const DEFAULT_BUILD: TankBuild = {
+  version: 2,
+  name: 'My Contraption',
+  color: '#5b7cfa',
+  attachments: [
+    { uid: 'starter-popper', partId: 'popper', mount: 0, layer: 0 },
+    { uid: 'starter-wheel-a', partId: 'wheel', mount: 3, layer: 0 },
+    { uid: 'starter-wheel-b', partId: 'wheel', mount: 5, layer: 0 },
+    { uid: 'starter-bumper', partId: 'bumper', mount: 4, layer: 0 },
+  ],
+};
 
 export function getPart(id: string): Part {
   const part = PARTS.find((item) => item.id === id);
-  if (!part) throw new Error(`Unknown tank part: ${id}`);
+  if (!part) throw new Error(`Unknown contraption part: ${id}`);
   return part;
 }
 
 export function buildCost(build: TankBuild): number {
-  return getPart(build.cannon).cost + getPart(build.armor).cost + getPart(build.engine).cost;
+  return build.attachments.reduce((total, item) => total + getPart(item.partId).cost, 0);
 }
 
-export function canAttach(build: TankBuild, nextPartId: string): boolean {
-  const part = getPart(nextPartId);
-  const next = { ...build, [part.slot]: part.id };
-  return buildCost(next) <= MAX_BOLTS;
+export function nextLayerAt(build: TankBuild, mount: MountIndex): 0 | 1 | null {
+  const used = new Set(build.attachments.filter((item) => item.mount === mount).map((item) => item.layer));
+  if (!used.has(0)) return 0;
+  if (!used.has(1)) return 1;
+  return null;
+}
+
+export function canAttach(build: TankBuild, partId: string, mount: MountIndex): boolean {
+  getPart(partId); // Validate the part id; cost is informational, never a blocker.
+  return nextLayerAt(build, mount) !== null;
+}
+
+export function attachPart(build: TankBuild, partId: string, mount: MountIndex): TankBuild {
+  const layer = nextLayerAt(build, mount);
+  if (layer === null || !canAttach(build, partId, mount)) return build;
+  return { ...build, attachments: [...build.attachments, makeAttachment(partId, mount, layer)] };
+}
+
+export function removeAttachment(build: TankBuild, uid: string): TankBuild {
+  return { ...build, attachments: build.attachments.filter((item) => item.uid !== uid) };
+}
+
+export function replaceAttachment(build: TankBuild, uid: string, partId: string): TankBuild {
+  getPart(partId);
+  if (!build.attachments.some((item) => item.uid === uid)) return build;
+  return { ...build, attachments: build.attachments.map((item) => item.uid === uid ? { ...item, partId } : item) };
 }
 
 export function calculateStats(build: TankBuild): TankStats {
-  const result: TankStats = { speed: 150, acceleration: 450, damage: 8, fireRate: 2, projectileSpeed: 350, projectileSize: 6, armor: 50, barrels: 1, spread: 0 };
-  for (const slot of ['cannon', 'armor', 'engine'] as SlotType[]) {
-    const additions = getPart(build[slot]).stats;
-    for (const key of Object.keys(additions) as (keyof TankStats)[]) {
-      const value = additions[key];
-      if (value !== undefined) result[key] = key === 'speed' && slot === 'engine' ? result[key] + value : value;
+  const stats: TankStats = { speed: 105, acceleration: 430, armor: 70, magnet: 0, weapons: [], boosters: [], ramDamage: 8 };
+  for (const attachment of build.attachments) {
+    const part = getPart(attachment.partId);
+    stats.speed += part.stats.speed ?? 0;
+    stats.acceleration += part.stats.acceleration ?? 0;
+    stats.armor += part.stats.armor ?? 0;
+    stats.magnet += part.stats.magnet ?? 0;
+    stats.ramDamage += part.stats.ramDamage ?? 0;
+    if (part.kind === 'shooter') {
+      stats.weapons.push({ uid: attachment.uid, mount: attachment.mount, layer: attachment.layer, damage: part.stats.damage!, fireRate: part.stats.fireRate!, projectileSpeed: part.stats.projectileSpeed!, projectileSize: part.stats.projectileSize!, spread: part.stats.spread!, burst: part.stats.burst!, color: part.color, behavior: part.behavior! });
     }
+    if (part.shape === 'booster') stats.boosters.push({ uid: attachment.uid, mount: attachment.mount, layer: attachment.layer, thrust: part.stats.thrust!, color: part.color });
   }
-  return result;
+  return stats;
 }
 
+export function boosterThrustForDirection(boosters: BoosterSpec[], aim: number, moveX: number, moveY: number): number {
+  return boosters.reduce((total, booster) => {
+    const thrustAngle = aim + booster.mount * Math.PI / 4 + Math.PI;
+    const alignment = Math.max(0, moveX * Math.cos(thrustAngle) + moveY * Math.sin(thrustAngle));
+    return total + booster.thrust * alignment;
+  }, 0);
+}
+
+export const BOOMERANG_RETURN_MS = 480;
+export const SPLITTER_BURST_MS = 430;
+export function shouldBoomerangReturn(ageMs: number): boolean { return ageMs >= BOOMERANG_RETURN_MS; }
+export function shouldSplitterBurst(ageMs: number, alreadySplit: boolean): boolean { return !alreadySplit && ageMs >= SPLITTER_BURST_MS; }
+export function wigglerHeading(baseAngle: number, ageMs: number, phase = 0): number { return baseAngle + Math.sin(ageMs / 105 + phase) * .58; }
+
 export function randomBuild(random = Math.random): TankBuild {
-  const build = { ...DEFAULT_BUILD };
-  for (const slot of ['cannon', 'armor', 'engine'] as SlotType[]) {
-    const choices = PARTS.filter((part) => part.slot === slot).sort(() => random() - 0.5);
-    for (const choice of choices) if (canAttach(build, choice.id)) { build[slot] = choice.id; break; }
+  let build: TankBuild = { version: 2, name: 'Wild Thing', color: ['#5b7cfa', '#ff725e', '#30b27a', '#936ee8', '#f08a24'][Math.floor(random() * 5)], attachments: [] };
+  const shuffledMounts = ([0,1,2,3,4,5,6,7] as MountIndex[]).sort(() => random() - .5);
+  build = attachPart(build, ['popper', 'sprinkler', 'bonker'][Math.floor(random() * 3)], shuffledMounts[0]);
+  let attempts = 0;
+  while (attempts++ < 30 && buildCost(build) < WILD_BUILD_TARGET) {
+    const part = PARTS[Math.floor(random() * PARTS.length)];
+    const mount = shuffledMounts[Math.floor(random() * shuffledMounts.length)];
+    const next = attachPart(build, part.id, mount);
+    if (next !== build) build = next;
   }
-  const colors = ['#5b7cfa', '#ff725e', '#30b27a', '#936ee8', '#f08a24'];
-  build.color = colors[Math.floor(random() * colors.length)];
   return build;
+}
+
+export function migrateBuild(value: unknown): TankBuild {
+  if (value && typeof value === 'object' && 'version' in value && (value as TankBuild).version === 2) return value as TankBuild;
+  return DEFAULT_BUILD;
 }
