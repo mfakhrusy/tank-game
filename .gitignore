@@ -4,3 +4,5 @@ backend/target/
 test-results/
 playwright-report/
 *.tsbuildinfo
+
+.wrangler/

@@ -56,3 +56,33 @@ Cloudflare Static Assets alone provides the full solo game. Public multiplayer a
 ### Separate production multiplayer server
 
 Production builds use the public backend origin in `.env.production` (`VITE_MULTIPLAYER_ORIGIN`). Room creation uses HTTPS and multiplayer uses WSS on that same backend. Local development leaves this unset and uses the Vite proxy. The origin is public configuration, not a secret; changing it requires rebuilding the frontend.
+
+### Share saved builds across computers
+
+The frontend Worker stores immutable build snapshots in Cloudflare D1. Each saved
+build automatically receives a three-word ID. Enter the ID in **My builds → Load a
+build by ID** on another computer to load and save a local copy. Anyone with the ID
+can load it. Editing a saved build creates a new ID; old IDs remain valid.
+Existing browser saves are published automatically when the workshop opens.
+
+The production frontend configuration is `wrangler.frontend.jsonc` (the original
+`wrangler.jsonc` is retained for custom-domain configuration). To deploy sharing:
+
+```bash
+npx wrangler d1 migrations apply BUILD_DB --remote --config wrangler.frontend.jsonc
+npm run deploy:cloudflare
+```
+
+Local development needs the Worker as well as Vite. Build once, then run the
+sharing service in a second terminal; it applies local database migrations:
+
+```bash
+npm run build
+npm run dev:sharing
+# In another terminal:
+npm run dev
+```
+
+Vite forwards `/api/builds` to the local sharing Worker on port 8788. Multiplayer
+continues to use the Rust server on port 8787. Shared builds do not use Linode and
+survive Worker deployments independently of active multiplayer rooms.

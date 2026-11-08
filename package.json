@@ -5,14 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && tsc -p tsconfig.worker.json && vite build",
     "check": "npm run test && npm run test:rust && npm run lint:rust && npm run build && npm run test:e2e",
-    "deploy:cloudflare": "npm run build && wrangler deploy",
+    "deploy:cloudflare": "npm run build && wrangler deploy --config wrangler.frontend.jsonc",
     "lint:rust": "cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings",
     "test": "vitest run",
     "test:rust": "cargo test --manifest-path backend/Cargo.toml --locked",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "dev:sharing": "wrangler d1 migrations apply BUILD_DB --local --config wrangler.frontend.jsonc && wrangler dev --config wrangler.frontend.jsonc --port 8788"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
