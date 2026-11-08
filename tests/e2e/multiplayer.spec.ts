@@ -42,3 +42,76 @@ test('a made-up room code gives a friendly error',async({page})=>{
   await page.getByRole('button',{name:'Join',exact:true}).click();
   await expect(page.getByText('Room not found or the server is unavailable.')).toBeVisible();
 });
+
+test('multiplayer projectiles travel smoothly between server snapshots',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const renderNetwork=TestScene.prototype.updateNetworkEntities;
+      TestScene.prototype.updateNetworkEntities=function(){
+        renderNetwork.call(this);
+        const now=performance.now(),frame=this.networkMotion.sample(now);
+        if(!frame)return;
+        this.motionSamples??=new Map();window.__shotSpeeds??=[];
+        for(const [id,entry] of this.networkProjectiles){
+          const previous=this.motionSamples.get(id),p=entry.image;
+          const stable=frame.from.projectiles.has(id)&&frame.to.projectiles.has(id)&&frame.from!==frame.to;
+          if(previous&&stable&&previous.stable&&now-previous.born>150&&now-previous.time<40){
+            window.__shotSpeeds.push(Math.hypot(p.x-previous.x,p.y-previous.y)*1000/(now-previous.time));
+          }
+          this.motionSamples.set(id,{x:p.x,y:p.y,time:now,born:previous?.born??now,stable});
+        }
+      };
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:'Create a room',exact:true}).click();
+  await expect(page.getByText('1 player connected')).toBeVisible();
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await page.mouse.move(1100,360);
+  await page.waitForTimeout(2500);
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  const speeds=await page.evaluate(()=>(window as any).__shotSpeeds as number[]);
+  expect(speeds.length).toBeGreaterThan(30);
+  speeds.sort((a,b)=>a-b);
+  const p05=speeds[Math.floor(speeds.length*.05)],p95=speeds[Math.floor(speeds.length*.95)];
+  expect(p05).toBeGreaterThan(350);
+  expect(p95/p05).toBeLessThan(1.3);
+  await page.getByRole('button',{name:'Leave room',exact:true}).click();
+});
+
+test('a multiplayer tank stops at a visible shape and receives server contact damage',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const originalCreate=TestScene.prototype.create;
+      TestScene.prototype.create=function(){originalCreate.call(this);window.__collisionScene=this;};
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:'Create a room',exact:true}).click();
+  await expect(page.getByText('1 player connected')).toBeVisible();
+  await page.waitForFunction(()=>{
+    const scene=(window as any).__collisionScene;
+    return scene&&[...scene.networkEnemies.values()].some((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(enemy.image.texture.key));
+  });
+  const fullHealth=await page.locator('.hp-card span').textContent();
+  await page.evaluate(()=>{
+    const scene=(window as any).__collisionScene;
+    const enemy=[...scene.networkEnemies.values()].find((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(enemy.image.texture.key)) as any;
+    (window as any).__contactTarget=enemy.image;
+    (scene.tank.body as any).reset(enemy.image.x-170,enemy.image.y);
+    scene.input.activePointer.positionToCamera=()=>({x:scene.tank.x+1000,y:scene.tank.y});
+  });
+  await page.keyboard.down('d');await page.waitForTimeout(1300);await page.keyboard.up('d');
+  await expect(page.locator('.hp-card span')).not.toHaveText(fullHealth!,{timeout:3000});
+  const distance=await page.evaluate(()=>{
+    const scene=(window as any).__collisionScene,enemy=(window as any).__contactTarget;
+    return enemy.x-scene.tank.x;
+  });
+  expect(distance).toBeGreaterThan(90);
+  expect(distance).toBeLessThan(170);
+  await page.getByRole('button',{name:'Leave room',exact:true}).click();
+});

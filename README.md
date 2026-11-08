@@ -52,3 +52,7 @@ The repository includes these deployment paths:
 - `docker compose up --build -d` deploys the complete client plus Rust WebSocket backend to a Docker host such as a VPS.
 
 Cloudflare Static Assets alone provides the full solo game. Public multiplayer additionally requires the Rust backend behind HTTPS/WSS, or a Cloudflare Workers Paid account capable of running the included backend image through Cloudflare Containers.
+
+### Separate production multiplayer server
+
+Production builds use the public backend origin in `.env.production` (`VITE_MULTIPLAYER_ORIGIN`). Room creation uses HTTPS and multiplayer uses WSS on that same backend. Local development leaves this unset and uses the Vite proxy. The origin is public configuration, not a secret; changing it requires rebuilding the frontend.

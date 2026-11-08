@@ -51,7 +51,9 @@ Then `sudo systemctl restart tank-game.service`. The installer replaces the base
 
 ## Serve the game with HTTPS
 
-The frontend currently calls `/api/rooms` and `/multiplayer/ROOM` on the same hostname as the game. A separate backend hostname alone will not connect the Cloudflare-hosted frontend. The simplest native setup is to serve the frontend and proxy the backend under one VPS hostname.
+Production frontend builds use the HTTPS backend origin in `.env.production` (`VITE_MULTIPLAYER_ORIGIN`), so the frontend can stay on Cloudflare while this VPS runs only the Rust service. For example, a Caddy site block for `tank-game-server.fahru.me` can simply contain `reverse_proxy 127.0.0.1:8787`. The service supports cross-origin frontend requests.
+
+Alternatively, to serve the frontend and backend under one VPS hostname, clear `VITE_MULTIPLAYER_ORIGIN` for that build and follow these steps:
 
 1. Build the frontend on your own computer (Node.js 24+):
 
@@ -93,7 +95,7 @@ The frontend currently calls `/api/rooms` and `/multiplayer/ROOM` on the same ho
 
 6. Open `https://YOUR_HOSTNAME` and test creating/joining a multiplayer room. Check `https://YOUR_HOSTNAME/api/health` if it cannot connect.
 
-If keeping the game on Cloudflare, its existing hostname must proxy `/api/*` and `/multiplayer/*` to this VPS instead. That routing is a separate setup; the native service installer does not change DNS or Cloudflare settings.
+If keeping the game on Cloudflare, set `VITE_MULTIPLAYER_ORIGIN` to the public HTTPS VPS hostname before building/deploying the frontend. Both room creation and WSS use that origin. Configure DNS and Caddy for the backend hostname; the service installer does not change DNS or Cloudflare settings.
 
 ## Updates
 

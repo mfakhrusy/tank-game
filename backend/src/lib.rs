@@ -591,13 +591,25 @@ async fn tick_world(room: &Room) {
         enemies, contacts, ..
     } = &mut *world;
     for player in players.values_mut() {
+        let outline = tank_outline(
+            &player.state.build,
+            player.state.x,
+            player.state.y,
+            player.state.rotation,
+        );
         for enemy in &mut *enemies {
-            let radius = 42.0 + enemy.size * 0.5;
-            if distance(player.state.x, player.state.y, enemy.x, enemy.y) > radius {
+            if enemy.health <= 0.0
+                || distance(player.state.x, player.state.y, enemy.x, enemy.y)
+                    > 180.0 + enemy.size * 0.71
+                || !tank_enemy_contact(&outline, enemy)
+            {
                 continue;
             }
             let key = format!("{}:{}", player.state.id, enemy.id);
-            if now.saturating_sub(*contacts.get(&key).unwrap_or(&0)) < 520 {
+            if contacts
+                .get(&key)
+                .is_some_and(|last| now.saturating_sub(*last) < 520)
+            {
                 continue;
             }
             contacts.insert(key, now);
@@ -1106,6 +1118,138 @@ fn enemy_separation(a: &Enemy, b: &Enemy) -> Option<Point> {
     }
     result
 }
+fn ellipse_outline(x: f32, y: f32, rx: f32, ry: f32) -> Vec<Point> {
+    (0..24)
+        .map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 24.0;
+            (x + a.cos() * rx, y + a.sin() * ry)
+        })
+        .collect()
+}
+fn box_outline(x: f32, y: f32, w: f32, h: f32) -> Vec<Point> {
+    vec![
+        (x - w / 2.0, y - h / 2.0),
+        (x + w / 2.0, y - h / 2.0),
+        (x + w / 2.0, y + h / 2.0),
+        (x - w / 2.0, y + h / 2.0),
+    ]
+}
+fn transform_outline(points: &[Point], x: f32, y: f32, angle: f32, scale: f32) -> Vec<Point> {
+    let (s, c) = angle.sin_cos();
+    points
+        .iter()
+        .map(|p| {
+            (
+                x + (p.0 * c - p.1 * s) * scale,
+                y + (p.0 * s + p.1 * c) * scale,
+            )
+        })
+        .collect()
+}
+fn tank_outline(build: &TankBuild, x: f32, y: f32, rotation: f32) -> Vec<Vec<Point>> {
+    let mut shapes = vec![ellipse_outline(0.0, 0.0, 60.0, 60.0)];
+    let mut depths = HashMap::<u8, u8>::new();
+    for a in &build.attachments {
+        depths
+            .entry(a.mount)
+            .and_modify(|layer| *layer = (*layer).max(a.layer))
+            .or_insert(a.layer);
+    }
+    for (mount, layer) in depths {
+        let end = if layer == 0 { 92.0 } else { 134.0 };
+        shapes.push(transform_outline(
+            &box_outline((46.0 + end) / 2.0, 0.0, end - 46.0, 18.0),
+            0.0,
+            0.0,
+            mount as f32 * std::f32::consts::FRAC_PI_4,
+            1.0,
+        ));
+    }
+    for a in &build.attachments {
+        let shape = match a.part_id.as_str() {
+            "popper" | "bonker" | "ricochet" => box_outline(
+                19.0,
+                0.0,
+                58.0,
+                if a.part_id == "bonker" { 34.0 } else { 26.0 },
+            ),
+            "sprinkler" | "boomer" | "wiggler" | "splitter" => vec![
+                (-15.0, -18.0),
+                (24.0, -18.0),
+                (46.0, 0.0),
+                (24.0, 18.0),
+                (-15.0, 18.0),
+            ],
+            "rocket" | "twin-booster" | "micro-booster" => vec![
+                (-28.0, -19.0),
+                (11.0, -19.0),
+                (35.0, -15.0),
+                (35.0, 15.0),
+                (11.0, 19.0),
+                (-28.0, 19.0),
+            ],
+            "bubble" | "brick" | "bumper" => vec![
+                (-18.0, -28.0),
+                (17.0, -28.0),
+                (30.0, -20.0),
+                (38.0, -7.0),
+                (38.0, 7.0),
+                (30.0, 20.0),
+                (17.0, 28.0),
+                (-18.0, 28.0),
+            ],
+            "wheel" | "crawler" => ellipse_outline(4.0, 0.0, 31.0, 22.0),
+            "spike" | "drill" => vec![(-25.0, -22.0), (41.0, 0.0), (-25.0, 22.0)],
+            _ => ellipse_outline(2.0, 0.0, 25.0, 25.0),
+        };
+        let angle = a.mount as f32 * std::f32::consts::FRAC_PI_4;
+        let radius = if a.layer == 0 { 62.0 } else { 104.0 };
+        shapes.push(transform_outline(
+            &shape,
+            angle.cos() * radius,
+            angle.sin() * radius,
+            angle,
+            if a.layer == 0 { 1.0 } else { 0.88 },
+        ));
+    }
+    shapes
+        .iter()
+        .map(|p| transform_outline(p, x, y, rotation, 1.0))
+        .collect()
+}
+fn tank_enemy_contact(tank: &[Vec<Point>], enemy: &Enemy) -> bool {
+    // Two pixels of contact tolerance allow the client to report a solid edge touch.
+    let scale = 1.0 + 2.0 / (enemy.size * 0.5);
+    let p = enemy_outline(enemy);
+    let pieces = if enemy.variant == "dart" {
+        vec![vec![p[0], p[1], p[2]], vec![p[0], p[2], p[3]]]
+    } else {
+        vec![p]
+    };
+    pieces.iter().any(|piece| {
+        let outline = transform_outline(piece, enemy.x, enemy.y, 0.0, scale);
+        tank.iter().any(|shape| {
+            let bounds = shape.iter().fold(
+                (
+                    f32::INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NEG_INFINITY,
+                ),
+                |(minx, miny, maxx, maxy), p| {
+                    (minx.min(p.0), miny.min(p.1), maxx.max(p.0), maxy.max(p.1))
+                },
+            );
+            let radius = enemy.size * 0.71 + 2.0;
+            enemy.x + radius >= bounds.0
+                && enemy.x - radius <= bounds.2
+                && enemy.y + radius >= bounds.1
+                && enemy.y - radius <= bounds.3
+                && polygon_separation(shape, &outline).is_some()
+        })
+    })
+}
+
 fn shape_impact_damage(speed: f32, health: f32) -> f32 {
     if speed < 60.0 {
         0.0
@@ -1509,6 +1653,57 @@ mod tests {
         let previous = HashMap::from([("a".into(), (0.0, 0.0)), ("b".into(), (56.0, 0.0))]);
         collide_enemies(&mut resting, &previous);
         assert!(resting.enemies.iter().all(|e| e.health == e.max_health));
+    }
+    #[test]
+    fn tank_collision_follows_attachments_rotation_and_empty_space() {
+        let mut tank = build();
+        tank.attachments[0].part_id = "spike".into();
+        tank.attachments[0].layer = 1;
+        let mut enemy = Enemy {
+            id: "target".into(),
+            variant: "chunk".into(),
+            level: 0,
+            x: 145.0,
+            y: 0.0,
+            home_x: 145.0,
+            home_y: 0.0,
+            health: 28.0,
+            max_health: 28.0,
+            size: 58.0,
+            speed: 0.0,
+            roam: 0.0,
+            phase: 0.0,
+            contact_damage: 3.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
+        };
+        assert!(tank_enemy_contact(
+            &tank_outline(&tank, 0.0, 0.0, 0.0),
+            &enemy
+        ));
+        enemy.x = 0.0;
+        enemy.y = 120.0;
+        assert!(!tank_enemy_contact(
+            &tank_outline(&tank, 0.0, 0.0, 0.0),
+            &enemy
+        ));
+        enemy.y = 145.0;
+        assert!(tank_enemy_contact(
+            &tank_outline(&tank, 0.0, 0.0, std::f32::consts::FRAC_PI_2),
+            &enemy
+        ));
+        tank.attachments.clear();
+        enemy.x = 90.0;
+        enemy.y = 0.0;
+        assert!(tank_enemy_contact(
+            &tank_outline(&tank, 0.0, 0.0, 0.0),
+            &enemy
+        ));
+        enemy.x = 100.0;
+        assert!(!tank_enemy_contact(
+            &tank_outline(&tank, 0.0, 0.0, 0.0),
+            &enemy
+        ));
     }
     async fn next_type<S>(socket: &mut S, wanted: &str) -> serde_json::Value
     where

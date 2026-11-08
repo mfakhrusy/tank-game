@@ -26,8 +26,14 @@ type Handlers = {
 
 export function normalizeRoomCode(value:string){return value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);}
 
+export function multiplayerEndpoint(path:string,origin=import.meta.env.VITE_MULTIPLAYER_ORIGIN||location.origin,websocket=false):string {
+  const endpoint=new URL(path,new URL(origin).origin);
+  if(websocket)endpoint.protocol=endpoint.protocol==='https:'?'wss:':'ws:';
+  return endpoint.toString();
+}
+
 export async function createMultiplayerRoom(){
-  const response=await fetch('/api/rooms',{method:'POST'});
+  const response=await fetch(multiplayerEndpoint('/api/rooms'),{method:'POST'});
   if(!response.ok)throw new Error('Could not create a room. Is the multiplayer server running?');
   const result=await response.json() as {roomId:string};
   return normalizeRoomCode(result.roomId);
@@ -40,8 +46,7 @@ export class MultiplayerConnection {
   connect(){
     this.disconnect(false);
     this.handlers.status('connecting');
-    const protocol=location.protocol==='https:'?'wss:':'ws:';
-    this.socket=new WebSocket(`${protocol}//${location.host}/multiplayer/${this.room}`);
+    this.socket=new WebSocket(multiplayerEndpoint(`/multiplayer/${this.room}`,undefined,true));
     this.socket.addEventListener('open',()=>this.socket?.send(JSON.stringify({type:'join',build:this.build})));
     this.socket.addEventListener('message',event=>this.receive(String(event.data)));
     this.socket.addEventListener('error',()=>this.handlers.status('disconnected','Room not found or the server is unavailable.'));

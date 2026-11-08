@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { NetworkMotion, interpolatePosition, interpolateRotation, RenderFrames } from './networkMotion';
 import { magnetPullDistance } from './magnet';
 import { tankOutline, blockOutline, tankBlockContact, circleOutline } from './collision';
 import { Attachment, ShooterBehavior, TankBuild, WeaponSpec, boosterThrustForDirection, calculateStats, getPart, shouldBoomerangReturn, shouldSplitterBurst, wigglerHeading } from './config';
@@ -19,6 +20,7 @@ const MIN_PROJECTILE_BUDGET = 48;
 
 export class TestScene extends Phaser.Scene {
   private shapeContacts=new Map<string,number>();
+  private healthBarValues=new WeakMap<Phaser.GameObjects.Image,{health:number;maximum:number;size:number}>();
   private healthBars=new Map<Phaser.GameObjects.Image,Phaser.GameObjects.Graphics>();
   private knockbacks=new Map<Block,{x:number;y:number}>();
   private stats;
@@ -47,6 +49,8 @@ export class TestScene extends Phaser.Scene {
   private activeEffectBits = 0;
   private projectileBudget = MAX_ACTIVE_PROJECTILES;
   private lastMultiplayerReport = 0;
+  private lastReportedFiring=false;
+  private networkMotion=new NetworkMotion();
   private remotePlayers = new Map<string,{wrapper:Phaser.GameObjects.Container;machine:Phaser.GameObjects.Container;targetX:number;targetY:number;targetRotation:number}>();
   private networkEnemies = new Map<string,{image:Phaser.GameObjects.Image;targetX:number;targetY:number;health:number;maxHealth:number}>();
   private networkProjectiles = new Map<string,{image:Phaser.GameObjects.Image;targetX:number;targetY:number;targetRotation:number}>();
@@ -92,9 +96,10 @@ export class TestScene extends Phaser.Scene {
     else this.tank.setAcceleration(0).setVelocity(this.tank.body!.velocity.x*.88,this.tank.body!.velocity.y*.88);
     for(const booster of this.stats.boosters){const thrustAngle=aim+booster.mount*Math.PI/4+Math.PI;const alignment=x||y?Math.max(0,x*Math.cos(thrustAngle)+y*Math.sin(thrustAngle)):0;const flame=this.boosterFlames.get(booster.uid);if(flame){const active=alignment>.08;flame.setVisible(true).setAlpha(active ? .55+Math.random()*.45 : .3).setScale(active ? .8+alignment*.55 : .55);}}
     this.machine.setPosition(this.tank.x,this.tank.y).setRotation(aim);
-    this.updateRemotePlayers();
+    this.updateRemotePlayers(delta);
     this.updateNetworkEntities();
-    if(this.reportMultiplayerState&&time-this.lastMultiplayerReport>=67){this.lastMultiplayerReport=time;this.reportMultiplayerState({x:this.tank.x,y:this.tank.y,rotation:aim,firing});}
+    if(this.multiplayerActive){this.resolveNetworkContacts();this.machine.setPosition(this.tank.x,this.tank.y);}
+    if(this.reportMultiplayerState&&(time-this.lastMultiplayerReport>=67||firing!==this.lastReportedFiring)){this.lastMultiplayerReport=time;this.lastReportedFiring=firing;this.reportMultiplayerState({x:this.tank.x,y:this.tank.y,rotation:aim,firing});}
     if(!this.multiplayerActive){this.updateChunks();this.updateKnockbacks(delta);this.updateEnemies(time,delta);this.updateMagnet(delta);this.updateShapeCollisions(time);this.tryAutoRepair(time);}
     if(time-this.lastPositionReport>250){this.lastPositionReport=time;useGameStore.getState().recordPosition(this.tank.x,this.tank.y);}
     if(!this.multiplayerActive){for (const child of this.bullets.getChildren()) { const bullet=child as Bullet; if(bullet.active)this.updateBullet(bullet,time); }if (firing) for (const weapon of this.stats.weapons) this.pendingShots+=this.tryFire(time,aim,weapon);if(time-this.lastMetricFlush>=100)this.flushCombatMetrics(time);}
@@ -245,15 +250,61 @@ export class TestScene extends Phaser.Scene {
   upsertRemotePlayer(player:NetworkPlayer){const current=this.remotePlayers.get(player.id);if(current){current.targetX=player.x;current.targetY=player.y;current.targetRotation=player.rotation;return;}const machine=this.makeMachine(player.build,false).setRotation(player.rotation);const label=this.add.text(0,-contraptionRadius(player.build)-24,player.build.name,{fontFamily:'Arial Black',fontSize:'13px',color:'#29324a',backgroundColor:'#fffdf8cc',padding:{x:6,y:3}}).setOrigin(.5);const wrapper=this.add.container(player.x,player.y,[machine,label]).setDepth(5).setAlpha(.86);this.remotePlayers.set(player.id,{wrapper,machine,targetX:player.x,targetY:player.y,targetRotation:player.rotation});this.reportRemoteCount();}
   removeRemotePlayer(playerId:string){const remote=this.remotePlayers.get(playerId);if(remote){remote.wrapper.destroy(true);this.remotePlayers.delete(playerId);this.reportRemoteCount();}}
   clearRemotePlayers(){for(const id of [...this.remotePlayers.keys()])this.removeRemotePlayer(id);}
-  private updateRemotePlayers(){for(const remote of this.remotePlayers.values()){remote.wrapper.x=Phaser.Math.Linear(remote.wrapper.x,remote.targetX,.22);remote.wrapper.y=Phaser.Math.Linear(remote.wrapper.y,remote.targetY,.22);remote.machine.rotation=Phaser.Math.Angle.RotateTo(remote.machine.rotation,remote.targetRotation,.18);}}
+  private updateRemotePlayers(delta:number){const blend=1-Math.exp(-Math.min(delta,100)/65);for(const remote of this.remotePlayers.values()){remote.wrapper.x=Phaser.Math.Linear(remote.wrapper.x,remote.targetX,blend);remote.wrapper.y=Phaser.Math.Linear(remote.wrapper.y,remote.targetY,blend);remote.machine.rotation=Phaser.Math.Angle.RotateTo(remote.machine.rotation,remote.targetRotation,Math.min(delta,100)*.011);}}
   private reportRemoteCount(){const parent=this.game.canvas.parentElement;if(parent)parent.dataset.remotePlayers=String(this.remotePlayers.size);}
 
-  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
-  applyNetworkWorld(snapshot:WorldSnapshot,selfId:string){this.setMultiplayerMode(true);const remoteIds=new Set<string>();for(const player of snapshot.players){if(player.id===selfId){useGameStore.getState().setHealth(player.health,player.maxHealth);continue;}remoteIds.add(player.id);this.upsertRemotePlayer(player);}for(const id of [...this.remotePlayers.keys()])if(!remoteIds.has(id))this.removeRemotePlayer(id);this.syncNetworkEnemies(snapshot.enemies);this.syncNetworkProjectiles(snapshot.projectiles);const parent=this.game.canvas.parentElement;if(parent){parent.dataset.worldRevision=String(snapshot.revision);parent.dataset.networkEnemies=String(snapshot.enemies.length);parent.dataset.networkEnemyIds=snapshot.enemies.map(enemy=>enemy.id).sort().join(',');parent.dataset.networkProjectiles=String(snapshot.projectiles.length);}}
-  private syncNetworkEnemies(enemies:NetworkEnemy[]){const live=new Set<string>();for(const enemy of enemies){live.add(enemy.id);const current=this.networkEnemies.get(enemy.id);if(current){current.targetX=enemy.x;current.targetY=enemy.y;current.health=enemy.health;current.maxHealth=enemy.maxHealth;continue;}const image=this.add.image(enemy.x,enemy.y,`enemy-${enemy.variant}-${enemy.level}`).setDepth(3);this.networkEnemies.set(enemy.id,{image,targetX:enemy.x,targetY:enemy.y,health:enemy.health,maxHealth:enemy.maxHealth});}for(const[id,enemy]of this.networkEnemies)if(!live.has(id)){enemy.image.destroy();this.networkEnemies.delete(id);}}
-  private syncNetworkProjectiles(projectiles:NetworkProjectile[]){const live=new Set<string>();for(const projectile of projectiles){live.add(projectile.id);const current=this.networkProjectiles.get(projectile.id);if(current){current.targetX=projectile.x;current.targetY=projectile.y;current.targetRotation=projectile.rotation;continue;}const texture=projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';const image=this.add.image(projectile.x,projectile.y,texture).setTint(projectile.color).setScale(projectile.size/10).setRotation(projectile.rotation).setDepth(4);this.networkProjectiles.set(projectile.id,{image,targetX:projectile.x,targetY:projectile.y,targetRotation:projectile.rotation});}for(const[id,projectile]of this.networkProjectiles)if(!live.has(id)){projectile.image.destroy();this.networkProjectiles.delete(id);}}
-  private updateNetworkEntities(){for(const enemy of this.networkEnemies.values()){enemy.image.x=Phaser.Math.Linear(enemy.image.x,enemy.targetX,.28);enemy.image.y=Phaser.Math.Linear(enemy.image.y,enemy.targetY,.28);this.updateShapeHealthBar(enemy.image,enemy.health,enemy.maxHealth,enemy.image.width-12);}for(const projectile of this.networkProjectiles.values()){projectile.image.x=Phaser.Math.Linear(projectile.image.x,projectile.targetX,.55);projectile.image.y=Phaser.Math.Linear(projectile.image.y,projectile.targetY,.55);projectile.image.rotation=Phaser.Math.Angle.RotateTo(projectile.image.rotation,projectile.targetRotation,.3);}}
-  private clearNetworkWorld(){this.clearRemotePlayers();for(const enemy of this.networkEnemies.values())enemy.image.destroy();for(const projectile of this.networkProjectiles.values())projectile.image.destroy();this.networkEnemies.clear();this.networkProjectiles.clear();const parent=this.game.canvas.parentElement;if(parent){parent.dataset.networkEnemies='0';parent.dataset.networkEnemyIds='';parent.dataset.networkProjectiles='0';delete parent.dataset.worldRevision;}}
+  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
+  applyNetworkWorld(snapshot:WorldSnapshot,selfId:string){this.setMultiplayerMode(true);if(!this.networkMotion.push(snapshot,performance.now()))return;const remoteIds=new Set<string>();for(const player of snapshot.players){if(player.id===selfId){
+      if(player.health<useGameStore.getState().health){this.machine.setAlpha(.5);this.tweens.add({targets:this.machine,alpha:1,duration:180});}
+      useGameStore.getState().setHealth(player.health,player.maxHealth);continue;}remoteIds.add(player.id);this.upsertRemotePlayer(player);}for(const id of [...this.remotePlayers.keys()])if(!remoteIds.has(id))this.removeRemotePlayer(id);const parent=this.game.canvas.parentElement;if(parent){parent.dataset.worldRevision=String(snapshot.revision);parent.dataset.networkEnemies=String(snapshot.enemies.length);parent.dataset.networkEnemyIds=snapshot.enemies.map(enemy=>enemy.id).sort().join(',');parent.dataset.networkProjectiles=String(snapshot.projectiles.length);}}
+  private syncNetworkEnemies(frame:RenderFrames){
+    for(const enemy of frame.from.enemies.values()){
+      const position=interpolatePosition(enemy,frame.to.enemies.get(enemy.id),frame.alpha);
+      let current=this.networkEnemies.get(enemy.id);
+      if(!current){
+        const image=this.add.image(position.x,position.y,`enemy-${enemy.variant}-${enemy.level}`).setDepth(3);
+        current={image,targetX:position.x,targetY:position.y,health:enemy.health,maxHealth:enemy.maxHealth};this.networkEnemies.set(enemy.id,current);
+      }
+      current.image.setPosition(position.x,position.y);
+      this.updateShapeHealthBar(current.image,enemy.health,enemy.maxHealth,current.image.width-12);
+    }
+    for(const [id,enemy] of this.networkEnemies)if(!frame.from.enemies.has(id)){enemy.image.destroy();this.networkEnemies.delete(id);}
+  }
+  private syncNetworkProjectiles(frame:RenderFrames){
+    for(const projectile of frame.from.projectiles.values()){
+      const next=frame.to.projectiles.get(projectile.id),position=interpolatePosition(projectile,next,frame.alpha);
+      const rotation=interpolateRotation(projectile.rotation,next?.rotation??projectile.rotation,frame.alpha);
+      let current=this.networkProjectiles.get(projectile.id);
+      if(!current){
+        const texture=projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
+        const image=this.add.image(position.x,position.y,texture).setTint(projectile.color).setScale(projectile.size/10).setDepth(4);
+        current={image,targetX:position.x,targetY:position.y,targetRotation:rotation};this.networkProjectiles.set(projectile.id,current);
+      }
+      current.image.setPosition(position.x,position.y).setRotation(rotation);
+    }
+    for(const [id,projectile] of this.networkProjectiles)if(!frame.from.projectiles.has(id)){projectile.image.destroy();this.networkProjectiles.delete(id);}
+  }
+  private updateNetworkEntities(){
+    const frame=this.networkMotion.sample(performance.now());if(!frame)return;
+    this.syncNetworkEnemies(frame);this.syncNetworkProjectiles(frame);
+  }
+  private resolveNetworkContacts(){
+    // Match the visible, interpolated silhouettes without predicting health or kills.
+    for(let pass=0;pass<2;pass++)for(const enemy of this.networkEnemies.values()){
+      const image=enemy.image;
+      if(Math.hypot(image.x-this.tank.x,image.y-this.tank.y)>contraptionRadius(this.build)+image.width)continue;
+      const variant=ENEMY_VARIANTS.find(item=>image.texture.key.startsWith(`enemy-${item.id}-`));if(!variant)continue;
+      const contact=tankBlockContact(this.collisionOutline,this.tank.x,this.tank.y,this.machine.rotation,blockOutline(variant.shape,variant.size),image.x,image.y,0);
+      if(!contact)continue;
+      this.tank.setPosition(this.tank.x+contact.x,this.tank.y+contact.y);
+      const body=this.tank.body as Phaser.Physics.Arcade.Body;body.updateFromGameObject();
+      const depth=Math.hypot(contact.x,contact.y);if(depth<.001)continue;
+      const nx=contact.x/depth,ny=contact.y/depth,inward=body.velocity.x*nx+body.velocity.y*ny;
+      if(inward<0)this.tank.setVelocity(body.velocity.x-inward*nx,body.velocity.y-inward*ny);
+    }
+  }
+
+  private clearNetworkWorld(){this.networkMotion.clear();this.clearRemotePlayers();for(const enemy of this.networkEnemies.values())enemy.image.destroy();for(const projectile of this.networkProjectiles.values())projectile.image.destroy();this.networkEnemies.clear();this.networkProjectiles.clear();const parent=this.game.canvas.parentElement;if(parent){parent.dataset.networkEnemies='0';parent.dataset.networkEnemyIds='';parent.dataset.networkProjectiles='0';delete parent.dataset.worldRevision;}}
 
   private knockOut(){if(this.respawning)return;this.respawning=true;this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.currentChunk='';this.updateChunks(true);});}
 
@@ -304,7 +355,10 @@ export class TestScene extends Phaser.Scene {
       image.once('destroy',()=>{bar!.destroy();this.healthBars.delete(image);});
     }
     const width=Math.max(28,Math.min(48,size*.7)),ratio=Math.max(0,Math.min(1,health/maximum));
-    bar.setVisible(true).setPosition(image.x,image.y-size/2-12).clear();
+    bar.setVisible(true).setPosition(image.x,image.y-size/2-12);
+    const previous=this.healthBarValues.get(image);
+    if(previous?.health===health&&previous.maximum===maximum&&previous.size===size)return;
+    this.healthBarValues.set(image,{health,maximum,size});bar.clear();
     bar.fillStyle(0x29324a,.9).fillRoundedRect(-width/2-2,-2,width+4,8,4);
     bar.fillStyle(0xfff8e8,1).fillRoundedRect(-width/2,0,width,4,2);
     bar.fillStyle(ratio>.35?0x58c995:0xff725e,1).fillRoundedRect(-width/2,0,Math.max(1,width*ratio),4,2);
