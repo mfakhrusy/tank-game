@@ -1,4 +1,4 @@
-import { freshProgression, upgradedStats, xpForShape, Progression } from './progression';
+import { freshProgression, upgradedStats, xpForShape, levelProgress, Progression } from './progression';
 import Phaser from 'phaser';
 import { coreArt } from './moduleArt';
 import { bakeArtwork, bakeModuleAtlas } from './renderArtwork';
@@ -10,10 +10,10 @@ import { useGameStore } from '../store';
 import { BLOCKS_PER_CHUNK, CHUNK_SIZE, WORLD_LIMIT, chunkAt, createChunkRandom, rectangularChunkWindow } from './world';
 import { canAutoRepair, repairAmount, smasherKnockback, ramImpactDamage, shapeImpactDamage } from './combat';
 import { CORE_RADIUS, LAYER_RADII, LAYER_SCALES, attachmentTransform, contraptionRadius, occupiedMountDepths } from './geometry';
-import { ENEMY_VARIANTS, EnemyShape, enemyCombatStats, enemyVariant, enemyVelocity } from './enemies';
+import { enemyWeapon, chooseEnemySpawn, ENEMY_VARIANTS, EnemyShape, enemyCombatStats, enemyVariant, enemyVelocity } from './enemies';
 import { LocalNetworkState, NetworkEnemy, NetworkPlayer, NetworkProjectile, WorldSnapshot } from '../multiplayer';
 
-type Block = Phaser.Physics.Arcade.Image & { hp:number; maxHp:number; size:number; outline:ReturnType<typeof blockOutline>; kind:number; contactDamage:number; homeX:number; homeY:number; moveSpeed:number; roamRadius:number; moveAngle:number; movePhase:number; targetVelocityX:number; targetVelocityY:number };
+type Block = Phaser.Physics.Arcade.Image & { hp:number; maxHp:number; size:number; outline:ReturnType<typeof blockOutline>; variantId:string;nextAttack:number;windupAt:number;kind:number; spawnLevel:number; contactDamage:number; homeX:number; homeY:number; moveSpeed:number; roamRadius:number; moveAngle:number; movePhase:number; targetVelocityX:number; targetVelocityY:number };
 type Bullet = Phaser.Physics.Arcade.Image & { damage:number; born:number; behavior:ShooterBehavior; baseAngle:number; baseSpeed:number; phase:number; splitDone:boolean; pierceLeft:number; hitBlocks:Set<string> };
 const MAX_ACTIVE_PROJECTILES = 120;
 const MAX_EFFECT_BITS = 60;
@@ -32,12 +32,14 @@ export class TestScene extends Phaser.Scene {
   private tank!: Phaser.Physics.Arcade.Image;
   private machine!: Phaser.GameObjects.Container;
   private bullets!: Phaser.Physics.Arcade.Group;
+  private enemyShots!: Phaser.Physics.Arcade.Group;
   private blocks!: Phaser.Physics.Arcade.Group;
   private staticBlocks!: Phaser.Physics.Arcade.StaticGroup;
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private lastShots = new Map<string, number>();
   private boosterFlames = new Map<string, Phaser.GameObjects.Container>();
   private blockCounter = 0;
+  private lastSpawnRefresh=0;
   private chunks = new Map<string, Block[]>();
   private currentChunk = '';
   private lastPositionReport = 0;
@@ -70,6 +72,7 @@ export class TestScene extends Phaser.Scene {
     this.makeTextures(); this.drawYard();
     this.blocks = this.physics.add.group({ allowGravity:false });
     this.staticBlocks = this.physics.add.staticGroup();
+    this.enemyShots=this.physics.add.group({maxSize:64});
     this.bullets = this.physics.add.group({ maxSize: MAX_ACTIVE_PROJECTILES });
     const collisionRadius=contraptionRadius(this.build)+24;
     this.tank = this.physics.add.image(0, 0, 'machine-body').setCircle(collisionRadius, 150-collisionRadius, 150-collisionRadius).setDrag(700).setMaxVelocity(Math.max(90, this.stats.speed)).setAlpha(.001);
@@ -80,6 +83,7 @@ export class TestScene extends Phaser.Scene {
     useGameStore.getState().resetHealth(this.stats.armor);
     this.lastDamageAt = this.time.now;
     this.lastRepairAt = this.time.now;
+    this.physics.add.overlap(this.tank,this.enemyShots,this.hitByEnemyShot as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,undefined,this);
     this.physics.add.overlap(this.tank, this.blocks, this.crashBlock as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback, undefined, this);
     this.physics.add.overlap(this.tank, this.staticBlocks, this.crashBlock as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback, undefined, this);
     this.physics.add.overlap(this.bullets, this.blocks, this.hitBlock as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback, undefined, this);
@@ -112,7 +116,7 @@ export class TestScene extends Phaser.Scene {
     this.updateNetworkEntities();
     if(this.multiplayerActive){this.resolveNetworkContacts();this.machine.setPosition(this.tank.x,this.tank.y);}
     if(this.reportMultiplayerState&&(time-this.lastMultiplayerReport>=67||firing!==this.lastReportedFiring)){this.lastMultiplayerReport=time;this.lastReportedFiring=firing;this.reportMultiplayerState({x:this.tank.x,y:this.tank.y,rotation:aim,firing});}
-    if(!this.multiplayerActive){this.updateChunks();this.updateKnockbacks(delta);this.updateEnemies(time,delta);this.updateMagnet(delta);this.updateShapeCollisions(time);this.tryAutoRepair(time);}
+    if(!this.multiplayerActive){this.updateChunks();this.refreshEnemySpawns(time);this.updateKnockbacks(delta);this.updateEnemies(time,delta);this.updateEnemyAttacks(time);this.updateMagnet(delta);this.updateShapeCollisions(time);this.tryAutoRepair(time);}
     if(time-this.lastPositionReport>250){this.lastPositionReport=time;useGameStore.getState().recordPosition(this.tank.x,this.tank.y);}
     if(!this.multiplayerActive){for (const child of this.bullets.getChildren()) { const bullet=child as Bullet; if(bullet.active)this.updateBullet(bullet,time); }if (firing) for (const weapon of this.stats.weapons) this.pendingShots+=this.tryFire(time,aim,weapon);if(time-this.lastMetricFlush>=100)this.flushCombatMetrics(time);}
     if(!this.multiplayerActive)for(const group of [this.blocks,this.staticBlocks])for(const child of group.getChildren()){
@@ -208,7 +212,7 @@ export class TestScene extends Phaser.Scene {
 
   private hitBlock(bulletObject:Phaser.Types.Physics.Arcade.GameObjectWithBody,blockObject:Phaser.Types.Physics.Arcade.GameObjectWithBody){
     const bullet=bulletObject as Bullet,block=blockObject as Block;if(!bullet.active||!block.active||bullet.hitBlocks.has(block.name))return;
-    const variant=ENEMY_VARIANTS.find(item=>`enemy-${item.id}-${block.kind}`===block.texture.key)!;
+    const variant=ENEMY_VARIANTS.find(item=>item.id===block.variantId)!;
     if(!tankBlockContact([circleOutline(bullet.displayWidth/2)],bullet.x,bullet.y,0,blockOutline(variant.shape,variant.size),block.x,block.y,block.rotation))return;
     bullet.hitBlocks.add(block.name);block.hp-=bullet.damage;this.pendingHits+=1;block.setTint(0xffffff);this.time.delayedCall(70,()=>block.active&&block.clearTint());this.pop(block.x,block.y,block.kind===2?0xff725e:0xf6c453,4);
     if(bullet.behavior==='ricochet'){
@@ -221,7 +225,7 @@ export class TestScene extends Phaser.Scene {
 
   private crashBlock(_tankObject:Phaser.Types.Physics.Arcade.GameObjectWithBody,blockObject:Phaser.Types.Physics.Arcade.GameObjectWithBody){
     const block=blockObject as Block;if(!block.active||this.respawning)return;
-    const variant=ENEMY_VARIANTS.find(item=>`enemy-${item.id}-${block.kind}`===block.texture.key)!;
+    const variant=ENEMY_VARIANTS.find(item=>item.id===block.variantId)!;
     const contact=tankBlockContact(this.collisionOutline,this.tank.x,this.tank.y,this.machine.rotation,blockOutline(variant.shape,variant.size),block.x,block.y,block.rotation);
     if(!contact)return;
     this.tank.setPosition(this.tank.x+contact.x,this.tank.y+contact.y);
@@ -257,7 +261,7 @@ export class TestScene extends Phaser.Scene {
   private updateRemotePlayers(delta:number){const blend=1-Math.exp(-Math.min(delta,100)/65);for(const remote of this.remotePlayers.values()){remote.wrapper.x=Phaser.Math.Linear(remote.wrapper.x,remote.targetX,blend);remote.wrapper.y=Phaser.Math.Linear(remote.wrapper.y,remote.targetY,blend);remote.machine.rotation=Phaser.Math.Angle.RotateTo(remote.machine.rotation,remote.targetRotation,Math.min(delta,100)*.011);}}
   private reportRemoteCount(){const parent=this.game.canvas.parentElement;if(parent)parent.dataset.remotePlayers=String(this.remotePlayers.size);}
 
-  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;useGameStore.getState().resetProgression();this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
+  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;useGameStore.getState().resetProgression();this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);this.enemyShots.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
   applyNetworkWorld(snapshot:WorldSnapshot,selfId:string){this.setMultiplayerMode(true);if(!this.networkMotion.push(snapshot,performance.now()))return;const remoteIds=new Set<string>();for(const player of snapshot.players){if(player.id===selfId){
       useGameStore.getState().setProgression(player.progression??freshProgression());
       if(player.health<useGameStore.getState().health){this.machine.setAlpha(.5);this.tweens.add({targets:this.machine,alpha:1,duration:180});}
@@ -267,10 +271,11 @@ export class TestScene extends Phaser.Scene {
       const position=interpolatePosition(enemy,frame.to.enemies.get(enemy.id),frame.alpha);
       let current=this.networkEnemies.get(enemy.id);
       if(!current){
-        const image=this.add.image(position.x,position.y,`enemy-${enemy.variant}-${enemy.level}`).setDepth(3);
+        const image=this.add.image(position.x,position.y,'enemy-atlas',`enemy-${enemy.variant}-${enemy.level}`).setDepth(3);
         current={image,targetX:position.x,targetY:position.y,health:enemy.health,maxHealth:enemy.maxHealth};this.networkEnemies.set(enemy.id,current);
       }
       current.image.setPosition(position.x,position.y);
+      if(enemy.charging)current.image.setTint(0xff8a6a);else current.image.clearTint();
       this.updateShapeHealthBar(current.image,enemy.health,enemy.maxHealth,current.image.width-12);
     }
     for(const [id,enemy] of this.networkEnemies)if(!frame.from.enemies.has(id)){enemy.image.destroy();this.networkEnemies.delete(id);}
@@ -281,7 +286,7 @@ export class TestScene extends Phaser.Scene {
       const rotation=interpolateRotation(projectile.rotation,next?.rotation??projectile.rotation,frame.alpha);
       let current=this.networkProjectiles.get(projectile.id);
       if(!current){
-        const texture=projectile.behavior==='railgun'?'rail-beam':projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
+        const texture=projectile.behavior==='hostile'?'enemy-shot':projectile.behavior==='railgun'?'rail-beam':projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
         const image=this.add.image(position.x,position.y,texture).setTint(projectile.color).setScale(projectile.size/10).setDepth(4);
         if(projectile.behavior==='railgun')image.setOrigin(0,.5).setDisplaySize(projectile.length??1100,16).clearTint();
         current={image,targetX:position.x,targetY:position.y,targetRotation:rotation};this.networkProjectiles.set(projectile.id,current);
@@ -303,7 +308,7 @@ export class TestScene extends Phaser.Scene {
     for(let pass=0;pass<2;pass++)for(const enemy of this.networkEnemies.values()){
       const image=enemy.image;
       if(Math.hypot(image.x-this.tank.x,image.y-this.tank.y)>contraptionRadius(this.build)+image.width)continue;
-      const variant=ENEMY_VARIANTS.find(item=>image.texture.key.startsWith(`enemy-${item.id}-`));if(!variant)continue;
+      const variant=ENEMY_VARIANTS.find(item=>String(image.frame.name).startsWith(`enemy-${item.id}-`));if(!variant)continue;
       const contact=tankBlockContact(this.collisionOutline,this.tank.x,this.tank.y,this.machine.rotation,blockOutline(variant.shape,variant.size),image.x,image.y,0);
       if(!contact)continue;
       this.tank.setPosition(this.tank.x+contact.x,this.tank.y+contact.y);
@@ -316,20 +321,27 @@ export class TestScene extends Phaser.Scene {
 
   private clearNetworkWorld(){this.networkMotion.clear();this.clearRemotePlayers();for(const enemy of this.networkEnemies.values())enemy.image.destroy();for(const projectile of this.networkProjectiles.values())projectile.image.destroy();this.networkEnemies.clear();this.networkProjectiles.clear();const parent=this.game.canvas.parentElement;if(parent){parent.dataset.networkEnemies='0';parent.dataset.networkEnemyIds='';parent.dataset.networkProjectiles='0';delete parent.dataset.worldRevision;}}
 
-  private knockOut(){if(this.respawning)return;this.respawning=true;useGameStore.getState().resetProgression();this.stats=calculateStats(this.build);this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.currentChunk='';this.updateChunks(true);});}
+  private knockOut(){if(this.respawning)return;this.respawning=true;this.enemyShots.clear(true,true);useGameStore.getState().resetProgression();this.stats=calculateStats(this.build);this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.chunks.clear();this.currentChunk='';this.updateChunks(true);});}
 
   private drawYard(){this.add.circle(0,0,115,0xf6c453,.1).setStrokeStyle(4,0xf6c453,.3);this.add.text(0,-105,'START',{fontFamily:'Arial Black',fontSize:'22px',color:'#29324a'}).setOrigin(.5).setAlpha(.25);}
   private makeTextures(){
     const body=this.make.graphics({x:0,y:0});body.fillStyle(0xffffff).fillCircle(150,150,145).generateTexture('machine-body',300,300);body.destroy();
     const ball=this.make.graphics({x:0,y:0});ball.fillStyle(0x29324a).fillCircle(11,11,11).fillStyle(0xffffff).fillCircle(11,11,7).generateTexture('bullet',22,22);ball.clear().fillStyle(0x29324a).fillRoundedRect(1,1,20,20,4).fillStyle(0xffffff).fillRoundedRect(5,5,12,12,2).generateTexture('bullet-square',22,22);ball.clear().lineStyle(7,0x29324a).beginPath().arc(12,12,9,.45,Math.PI*2-.45).strokePath().lineStyle(3,0xffffff).beginPath().arc(12,12,8,.5,Math.PI*2-.5).strokePath().generateTexture('bullet-boomerang',24,24);ball.destroy();
     ENEMY_VARIANTS.forEach(variant=>{for(let kind=0;kind<3;kind++)this.makeEnemyTexture(variant.id,variant.shape,variant.size,variant.color,kind);});
+    const atlas=this.textures.createCanvas('enemy-atlas',512,Math.ceil(ENEMY_VARIANTS.length*3/4)*128)!;
+    ENEMY_VARIANTS.forEach((variant,index)=>{for(let kind=0;kind<3;kind++){
+      const key=`enemy-${variant.id}-${kind}`,tile=index*3+kind,x=tile%4*128,y=Math.floor(tile/4)*128,size=variant.size+12;
+      atlas.getContext().drawImage(this.textures.get(key).getSourceImage() as HTMLCanvasElement,x,y);
+      atlas.add(key,0,x,y,size,size);this.textures.remove(key);
+    }});atlas.refresh();
+    const hostile=this.make.graphics({x:0,y:0});hostile.fillStyle(0x29324a).fillCircle(10,10,9).fillStyle(0xff725e).fillCircle(10,10,6).fillStyle(0xfff0ba).fillCircle(10,10,3).generateTexture('enemy-shot',20,20);hostile.destroy();
     const rail=this.make.graphics({x:0,y:0});rail.fillStyle(0x39d9df,.18).fillRect(0,0,64,16).fillStyle(0x39d9df,.7).fillRect(0,5,64,6).fillStyle(0xeaffff).fillRect(0,7,64,2).generateTexture('rail-beam',64,16);rail.destroy();
     const bit=this.make.graphics({x:0,y:0});bit.fillStyle(0xffffff).fillCircle(4,4,4).generateTexture('bit',8,8);bit.destroy();
   }
   private makeEnemyTexture(id:string,shape:EnemyShape,size:number,color:number,kind:number){
     const padding=6,textureSize=size+padding*2,c=textureSize/2,outer=size/2,inner=outer-5,graphic=this.make.graphics({x:0,y:0});
     const points=(radius:number,sides:number,rotation=-Math.PI/2)=>Array.from({length:sides},(_,i)=>new Phaser.Math.Vector2(c+Math.cos(rotation+i*Math.PI*2/sides)*radius,c+Math.sin(rotation+i*Math.PI*2/sides)*radius));
-    const draw=(fill:number,inset=0)=>{const radius=outer-inset;graphic.fillStyle(fill,1);if(shape==='orb')graphic.fillCircle(c,c,radius);else if(shape==='box')graphic.fillRoundedRect(c-radius,c-radius,radius*2,radius*2,Math.max(8,radius*.3));else if(shape==='diamond')graphic.fillPoints(points(radius,4),true);else if(shape==='hex')graphic.fillPoints(points(radius,6),true);else if(shape==='shard')graphic.fillPoints([new Phaser.Math.Vector2(c+radius,c),new Phaser.Math.Vector2(c-radius*.72,c-radius*.72),new Phaser.Math.Vector2(c-radius*.42,c),new Phaser.Math.Vector2(c-radius*.72,c+radius*.72)],true);else graphic.fillRoundedRect(c-radius,c-radius*.62,radius*2,radius*1.24,radius*.62);};
+    const draw=(fill:number,inset=0)=>{const radius=outer-inset;graphic.fillStyle(fill,1);if(shape==='orb')graphic.fillCircle(c,c,radius);else if(shape==='box')graphic.fillRoundedRect(c-radius,c-radius,radius*2,radius*2,Math.max(8,radius*.3));else if(shape==='diamond')graphic.fillPoints(points(radius,4),true);else if(shape==='hex')graphic.fillPoints(points(radius,6),true);else if(shape==='triangle'||shape==='pentagon'||shape==='octagon')graphic.fillPoints(points(radius,shape==='triangle'?3:shape==='pentagon'?5:8),true);else if(shape==='shard')graphic.fillPoints([new Phaser.Math.Vector2(c+radius,c),new Phaser.Math.Vector2(c-radius*.72,c-radius*.72),new Phaser.Math.Vector2(c-radius*.42,c),new Phaser.Math.Vector2(c-radius*.72,c+radius*.72)],true);else graphic.fillRoundedRect(c-radius,c-radius*.62,radius*2,radius*1.24,radius*.62);};
     draw(0x29324a);draw(color,5);
     const ink=0x29324a;
     if(shape==='shard'){
@@ -337,7 +349,7 @@ export class TestScene extends Phaser.Scene {
       graphic.lineStyle(3,ink,1).lineBetween(c+2,c,c+8,c);
       for(let pip=0;pip<=kind;pip++)graphic.fillStyle(ink).fillCircle(c-3,c+(pip-kind/2)*4.5,1.2);
     }else{
-      const narrow=shape==='diamond',flat=shape==='capsule';
+      const narrow=shape==='diamond'||shape==='triangle',flat=shape==='capsule';
       const eyeY=c-inner*(flat?.16:.12),eyeSpacing=inner*(narrow?.23:.32),eyeRadius=Math.max(2,size*.045);
       graphic.fillStyle(0xffffff,.28);
       if(narrow)graphic.fillEllipse(c-inner*.16,c-inner*.53,inner*.3,inner*.13);
@@ -350,14 +362,67 @@ export class TestScene extends Phaser.Scene {
         graphic.lineTo(c-mouthWidth+mouthWidth*2*t,mouthY+Math.sin(t*Math.PI)*inner*.07);
       }
       graphic.strokePath();
-      const pipY=c+inner*(narrow?.48:flat?.38:.62),pipRadius=Math.max(1.3,Math.min(2,size*.028)),pipSpacing=pipRadius*3;
+      const pipY=c+inner*(shape==='triangle'?.34:narrow?.48:flat?.38:.62),pipRadius=Math.max(1.3,Math.min(2,size*.028)),pipSpacing=pipRadius*3;
       for(let pip=0;pip<=kind;pip++)graphic.fillStyle(ink,.7).fillCircle(c+(pip-kind/2)*pipSpacing,pipY,pipRadius);
+    }
+    if(enemyWeapon(id)){
+      graphic.fillStyle(ink).fillCircle(c,c+inner*.12,6).fillStyle(0xff725e).fillCircle(c,c+inner*.12,3.5);
+      graphic.lineStyle(2,ink).lineBetween(c-inner*.4,c-inner*.36,c-inner*.12,c-inner*.23).lineBetween(c+inner*.4,c-inner*.36,c+inner*.12,c-inner*.23);
     }
     graphic.generateTexture(`enemy-${id}-${kind}`,textureSize,textureSize);graphic.destroy();
   }
   private updateChunks(force=false){const center=chunkAt(this.tank.x,this.tank.y),zoom=useGameStore.getState().cameraZoom,radiusX=Math.max(1,Math.ceil(this.scale.width/(2*zoom*CHUNK_SIZE))),radiusY=Math.max(1,Math.ceil(this.scale.height/(2*zoom*CHUNK_SIZE))),windowKey=`${center.key}:${radiusX},${radiusY}`;if(!force&&windowKey===this.currentChunk)return;this.currentChunk=windowKey;for(const chunk of rectangularChunkWindow(center.x,center.y,radiusX,radiusY)){if(!this.chunks.has(chunk.key))this.generateChunk(chunk.x,chunk.y,chunk.key);}for(const[key,blocks]of this.chunks){const chunk=key.split(',').map(Number);if(Math.abs(chunk[0]-center.x)>radiusX||Math.abs(chunk[1]-center.y)>radiusY){blocks.forEach(block=>block.active&&block.destroy());this.chunks.delete(key);}}}
-  private generateChunk(cx:number,cy:number,key:string){const random=createChunkRandom(cx,cy),blocks:Block[]=[];for(let i=0;i<BLOCKS_PER_CHUNK;i++){const x=(cx+random())*CHUNK_SIZE,y=(cy+random())*CHUNK_SIZE;if(Phaser.Math.Distance.Between(x,y,this.tank.x,this.tank.y)<190)continue;blocks.push(this.createBlock(x,y,Math.floor(random()*3),Math.floor(random()*ENEMY_VARIANTS.length),random()*Math.PI*2));}this.chunks.set(key,blocks);}
-  private createBlock(x:number,y:number,kind:number,variantIndex=1,phase=0){const variant=enemyVariant(variantIndex),combat=enemyCombatStats(kind,variant),group=variant.moveSpeed?this.blocks:this.staticBlocks,block=group.create(x,y,`enemy-${variant.id}-${kind}`) as Block;this.blockCounter+=1;block.name=`block-${this.blockCounter}`;block.kind=kind;block.hp=combat.health;block.maxHp=combat.health;block.size=variant.size;block.outline=blockOutline(variant.shape,variant.size);block.contactDamage=combat.contactDamage;block.homeX=x;block.homeY=y;block.moveSpeed=variant.moveSpeed;block.roamRadius=variant.roamRadius;block.moveAngle=phase;block.movePhase=phase;const initialVelocity=enemyVelocity(0,variant,phase,x,y,x,y);block.targetVelocityX=initialVelocity.x;block.targetVelocityY=initialVelocity.y;block.setAngle(((x+y)%21)-10);if(variant.moveSpeed)block.setImmovable(true).setPushable(false).setVelocity(initialVelocity.x,initialVelocity.y);const textureSize=variant.size+12;if(variant.shape==='orb')block.setCircle(variant.size/2,6,6);else{const body=block.body as Phaser.Physics.Arcade.Body|Phaser.Physics.Arcade.StaticBody,bodySize=variant.size*Math.SQRT2,offset=(textureSize-bodySize)/2;body.setSize(bodySize,bodySize).setOffset(offset,offset);}return block;}
+  private updateEnemyAttacks(time:number){
+    for(const object of this.enemyShots.getChildren()){
+      const shot=object as Bullet;if(time-shot.born>3200)shot.destroy();
+    }
+    for(const object of [...this.blocks.getChildren(),...this.staticBlocks.getChildren()]){
+      const block=object as Block,weapon=enemyWeapon(block.variantId);if(!block.active||!weapon)continue;
+      const range=Math.hypot(block.x-this.tank.x,block.y-this.tank.y);
+      if(range>750){block.windupAt=0;block.clearTint();continue;}
+      if(time<block.nextAttack)continue;
+      if(!block.windupAt)block.windupAt=time;
+      block.setTint(0xff8a6a);if(block.moveSpeed)block.setVelocity(0,0);
+      if(time-block.windupAt<500)continue;
+      const angle=Math.atan2(this.tank.y-block.y,this.tank.x-block.x);
+      for(let i=0;i<weapon.burst;i++){
+        const a=angle+(i-(weapon.burst-1)/2)*weapon.spread,r=block.size/2+10;
+        const shot=this.enemyShots.create(block.x+Math.cos(a)*r,block.y+Math.sin(a)*r,'enemy-shot') as Bullet|null;
+        if(shot){shot.born=time;shot.damage=weapon.damage;shot.setDepth(4).setScale(.65).setVelocity(Math.cos(a)*weapon.speed,Math.sin(a)*weapon.speed);}
+      }
+      block.nextAttack=time+weapon.cooldown;block.windupAt=0;block.clearTint();
+    }
+  }
+  private hitByEnemyShot(_tankObject:Phaser.Types.Physics.Arcade.GameObjectWithBody,shotObject:Phaser.Types.Physics.Arcade.GameObjectWithBody){
+    const shot=shotObject as Bullet;if(!shot.active||this.respawning)return;
+    if(!tankBlockContact(this.collisionOutline,this.tank.x,this.tank.y,this.machine.rotation,circleOutline(5),shot.x,shot.y,0))return;
+    const damage=shot.damage;shot.destroy();if(this.time.now-this.lastDamageAt<200)return;
+    useGameStore.getState().damageHealth(damage);this.lastDamageAt=this.time.now;
+    this.machine.setAlpha(.5);this.tweens.add({targets:this.machine,alpha:1,duration:120});
+    if(useGameStore.getState().health<=0)this.knockOut();
+  }
+
+  private refreshEnemySpawns(time:number){
+    if(time-this.lastSpawnRefresh<2000)return;this.lastSpawnRefresh=time;
+    const level=levelProgress(useGameStore.getState().progression).level;
+    const cameraView=this.cameras.main.worldView,view=new Phaser.Geom.Rectangle(cameraView.x-120,cameraView.y-120,cameraView.width+240,cameraView.height+240);
+    let budget=2;
+    for(const [key,blocks] of this.chunks){
+      const live=blocks.filter(block=>block.active);
+      this.chunks.set(key,live);
+      const stale=live.find(block=>block.spawnLevel<level&&!view.contains(block.x,block.y));
+      let x:number,y:number;
+      if(stale){x=stale.x;y=stale.y;stale.destroy();live.splice(live.indexOf(stale),1);}
+      else if(live.length<BLOCKS_PER_CHUNK){const [cx,cy]=key.split(',').map(Number);x=(cx+Math.random())*CHUNK_SIZE;y=(cy+Math.random())*CHUNK_SIZE;if(view.contains(x,y)||Math.hypot(x-this.tank.x,y-this.tank.y)<250)continue;}
+      else continue;
+      const spawn=chooseEnemySpawn(level,Math.random(),Math.random());
+      live.push(this.createBlock(x,y,spawn.kind,spawn.variantIndex,Math.random()*Math.PI*2));
+      if(--budget<=0)break;
+    }
+  }
+
+  private generateChunk(cx:number,cy:number,key:string){const random=createChunkRandom(cx,cy),blocks:Block[]=[];for(let i=0;i<BLOCKS_PER_CHUNK;i++){const x=(cx+random())*CHUNK_SIZE,y=(cy+random())*CHUNK_SIZE;if(Phaser.Math.Distance.Between(x,y,this.tank.x,this.tank.y)<190)continue;const spawn=chooseEnemySpawn(levelProgress(useGameStore.getState().progression).level,random(),random());blocks.push(this.createBlock(x,y,spawn.kind,spawn.variantIndex,random()*Math.PI*2));}this.chunks.set(key,blocks);}
+  private createBlock(x:number,y:number,kind:number,variantIndex=1,phase=0){const variant=enemyVariant(variantIndex),combat=enemyCombatStats(kind,variant),group=variant.moveSpeed?this.blocks:this.staticBlocks,block=group.create(x,y,'enemy-atlas',`enemy-${variant.id}-${kind}`) as Block;this.blockCounter+=1;block.name=`block-${this.blockCounter}`;block.variantId=variant.id;block.nextAttack=this.time.now+2000+Math.random()*1500;block.windupAt=0;block.kind=kind;block.spawnLevel=levelProgress(useGameStore.getState().progression).level;block.hp=combat.health;block.maxHp=combat.health;block.size=variant.size;block.outline=blockOutline(variant.shape,variant.size);block.contactDamage=combat.contactDamage;block.homeX=x;block.homeY=y;block.moveSpeed=variant.moveSpeed;block.roamRadius=variant.roamRadius;block.moveAngle=phase;block.movePhase=phase;const initialVelocity=enemyVelocity(0,variant,phase,x,y,x,y);block.targetVelocityX=initialVelocity.x;block.targetVelocityY=initialVelocity.y;block.setAngle(((x+y)%21)-10);if(variant.moveSpeed)block.setImmovable(true).setPushable(false).setVelocity(initialVelocity.x,initialVelocity.y);const textureSize=variant.size+12;if(variant.shape==='orb')block.setCircle(variant.size/2,6,6);else{const body=block.body as Phaser.Physics.Arcade.Body|Phaser.Physics.Arcade.StaticBody,bodySize=variant.size*Math.SQRT2,offset=(textureSize-bodySize)/2;body.setSize(bodySize,bodySize).setOffset(offset,offset);}return block;}
   private updateShapeHealthBar(image:Phaser.GameObjects.Image,health:number,maximum:number,size:number){
     let bar=this.healthBars.get(image);
     if(health>=maximum||health<=0){bar?.setVisible(false);return;}

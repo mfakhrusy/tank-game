@@ -48,7 +48,7 @@ export function blockOutline(shape:EnemyShape,size:number):Polygon {
       for(let i=0;i<=4;i++){const angle=(start+i*22.5)*Math.PI/180;points.push({x:x+Math.cos(angle)*corner,y:y+Math.sin(angle)*corner});}
     return points;
   }
-  const sides=shape==='diamond'?4:6;
+  const sides=shape==='triangle'?3:shape==='pentagon'?5:shape==='octagon'?8:shape==='diamond'?4:6;
   return Array.from({length:sides},(_,i)=>({x:Math.cos(-Math.PI/2+i*Math.PI*2/sides)*r,y:Math.sin(-Math.PI/2+i*Math.PI*2/sides)*r}));
 }
 // Separating-axis test: return the smallest displacement that frees the tank.

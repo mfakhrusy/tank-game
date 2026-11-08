@@ -115,6 +115,7 @@ pub struct EnemyState {
     pub y: f32,
     pub health: f32,
     pub max_health: f32,
+    pub charging: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -237,6 +238,7 @@ struct Projectile {
 }
 #[derive(Default)]
 struct World {
+    enemy_attacks: HashMap<String, (u64, u64)>,
     enemies: Vec<Enemy>,
     projectiles: Vec<Projectile>,
     stats: RoomStats,
@@ -531,13 +533,28 @@ async fn tick_world(room: &Room) {
     world
         .enemies
         .retain(|enemy| distance(enemy.x, enemy.y, center_x, center_y) < ENEMY_ACTIVE_RADIUS);
+    let party_level = if players.is_empty() {
+        1
+    } else {
+        (players
+            .values()
+            .map(|p| p.state.progression.level() as u32)
+            .sum::<u32>()
+            / players.len() as u32) as u8
+    };
     while world.enemies.len() < ENEMY_TARGET {
-        spawn_enemy(&mut world, center_x, center_y);
+        spawn_enemy(&mut world, center_x, center_y, party_level);
     }
     let previous_positions: HashMap<String, (f32, f32)> = world
         .enemies
         .iter()
         .map(|e| (e.id.clone(), (e.x, e.y)))
+        .collect();
+    let charging: HashSet<String> = world
+        .enemy_attacks
+        .iter()
+        .filter(|(_, (_, charge))| *charge > 0)
+        .map(|(id, _)| id.clone())
         .collect();
     for enemy in &mut world.enemies {
         let decay = (-5.0 * TICK_MS as f32 / 1000.0).exp();
@@ -549,7 +566,7 @@ async fn tick_world(room: &Room) {
         enemy.home_y += push_y;
         enemy.knock_x *= decay;
         enemy.knock_y *= decay;
-        if enemy.speed <= 0.0 {
+        if enemy.speed <= 0.0 || charging.contains(&enemy.id) {
             continue;
         }
         let dx = enemy.home_x - enemy.x;
@@ -656,7 +673,8 @@ async fn tick_world(room: &Room) {
         }
     }
     collide_enemies(&mut world, &previous_positions);
-    update_projectiles(&mut world, &players);
+    update_projectiles(&mut world, &mut players);
+    update_enemy_attacks(&mut world, &players);
     let mut destroyed = 0u64;
     let mut earned_xp = 0u64;
     world.enemies.retain(|enemy| {
@@ -734,10 +752,47 @@ async fn tick_world(room: &Room) {
     }
 }
 
-fn update_projectiles(world: &mut World, players: &HashMap<String, ConnectedPlayer>) {
+fn update_projectiles(world: &mut World, players: &mut HashMap<String, ConnectedPlayer>) {
     let now = world.elapsed;
     let mut children = Vec::new();
     for projectile in &mut world.projectiles {
+        if projectile.behavior == "hostile" {
+            projectile.age += TICK_MS;
+            projectile.x += projectile.vx * TICK_MS as f32 / 1000.0;
+            projectile.y += projectile.vy * TICK_MS as f32 / 1000.0;
+            let outline = ellipse_outline(projectile.x, projectile.y, 5.0, 5.0);
+            for player in players.values_mut() {
+                if distance(projectile.x, projectile.y, player.state.x, player.state.y) > 220.0 {
+                    continue;
+                }
+                let tank = tank_outline(
+                    &player.state.build,
+                    player.state.x,
+                    player.state.y,
+                    player.state.rotation,
+                );
+                if !tank
+                    .iter()
+                    .any(|shape| polygon_separation(shape, &outline).is_some())
+                {
+                    continue;
+                }
+                projectile.age = projectile.lifetime;
+                if now.saturating_sub(player.last_damage) >= 200 {
+                    player.state.health = (player.state.health - projectile.damage).max(0.0);
+                    player.last_damage = now;
+                    if player.state.health <= 0.0 {
+                        player.state.progression = Progression::default();
+                        player.state.max_health = build_armor(&player.state.build);
+                        player.state.health = player.state.max_health;
+                        player.state.x = 0.0;
+                        player.state.y = 0.0;
+                    }
+                }
+                break;
+            }
+            continue;
+        }
         if projectile.behavior == "railgun" {
             if projectile.age == 0 {
                 for enemy in &mut world.enemies {
@@ -997,19 +1052,134 @@ fn child_projectile(id: u64, parent: &Projectile, offset: f32) -> Projectile {
         hit: HashSet::new(),
     }
 }
-fn spawn_enemy(world: &mut World, cx: f32, cy: f32) {
+fn enemy_weapon(id: &str) -> Option<(u64, u8, f32, f32, f32)> {
+    match id {
+        "prism" => Some((3200, 1, 0.0, 260.0, 4.0)),
+        "sentinel" => Some((3800, 2, 0.13, 240.0, 5.0)),
+        "bastion" => Some((4400, 3, 0.22, 220.0, 6.0)),
+        _ => None,
+    }
+}
+fn update_enemy_attacks(world: &mut World, players: &HashMap<String, ConnectedPlayer>) {
+    world
+        .enemy_attacks
+        .retain(|id, _| world.enemies.iter().any(|e| e.id == *id && e.health > 0.0));
+    let mut count = world
+        .projectiles
+        .iter()
+        .filter(|p| p.behavior == "hostile")
+        .count();
+    for enemy in &world.enemies {
+        let Some((cooldown, burst, spread, speed, damage)) = enemy_weapon(&enemy.variant) else {
+            continue;
+        };
+        if enemy.health <= 0.0 {
+            continue;
+        }
+        let attack = world
+            .enemy_attacks
+            .entry(enemy.id.clone())
+            .or_insert((world.elapsed + 2000 + (enemy.phase * 200.0) as u64, 0));
+        let target = players.values().min_by(|a, b| {
+            distance(enemy.x, enemy.y, a.state.x, a.state.y)
+                .total_cmp(&distance(enemy.x, enemy.y, b.state.x, b.state.y))
+        });
+        let Some(target) = target else {
+            continue;
+        };
+        if distance(enemy.x, enemy.y, target.state.x, target.state.y) > 750.0 {
+            attack.1 = 0;
+            continue;
+        }
+        if world.elapsed < attack.0 {
+            continue;
+        }
+        if attack.1 == 0 {
+            attack.1 = world.elapsed;
+        }
+        if world.elapsed.saturating_sub(attack.1) < 500 {
+            continue;
+        }
+        let angle = (target.state.y - enemy.y).atan2(target.state.x - enemy.x);
+        for i in 0..burst {
+            if count >= 64 {
+                break;
+            }
+            count += 1;
+            let a = angle + (i as f32 - (burst - 1) as f32 / 2.0) * spread;
+            let r = enemy.size / 2.0 + 10.0;
+            world.next_id += 1;
+            world.projectiles.push(Projectile {
+                id: format!("p{}", world.next_id),
+                owner_id: enemy.id.clone(),
+                behavior: "hostile".into(),
+                x: enemy.x + a.cos() * r,
+                y: enemy.y + a.sin() * r,
+                vx: a.cos() * speed,
+                vy: a.sin() * speed,
+                rotation: a,
+                size: 6.5,
+                color: 0xffffff,
+                damage,
+                age: 0,
+                lifetime: 3200,
+                base_angle: a,
+                base_speed: speed,
+                phase: 0.0,
+                split: false,
+                pierce: 1,
+                hit: HashSet::new(),
+            });
+        }
+        *attack = (world.elapsed + cooldown, 0);
+    }
+}
+
+fn enemy_tier_weights(level: u8) -> [f32; 3] {
+    let level = level.clamp(1, 26) as f32;
+    let weak = 0.94 - 0.82 * (level - 1.0) / 25.0;
+    let strong = 0.6 * ((level - 4.0) / 22.0).max(0.0);
+    [weak, 1.0 - weak - strong, strong]
+}
+fn enemy_variant_weight(level: u8, unlock: u8) -> f32 {
+    if level < unlock {
+        0.0
+    } else if unlock == 1 {
+        1.0
+    } else {
+        ((level - unlock + 1) as f32 * 0.2).min(1.5)
+    }
+}
+fn weighted_index(weights: &[f32], roll: f32) -> usize {
+    let mut remaining = roll.clamp(0.0, 0.999999) * weights.iter().sum::<f32>();
+    for (index, weight) in weights.iter().enumerate() {
+        remaining -= weight;
+        if remaining < 0.0 {
+            return index;
+        }
+    }
+    0
+}
+fn spawn_enemy(world: &mut World, cx: f32, cy: f32, player_level: u8) {
     let mut rng = rand::rng();
     let variants = [
-        ("bubble", 42.0, 72.0, 120.0, 0.72, 0.7),
-        ("chunk", 58.0, 0.0, 0.0, 1.0, 1.0),
-        ("kite", 54.0, 96.0, 170.0, 0.82, 0.86),
-        ("honey", 72.0, 0.0, 0.0, 1.38, 1.28),
-        ("dart", 48.0, 128.0, 210.0, 0.62, 1.08),
-        ("loaf", 86.0, 0.0, 0.0, 1.65, 1.45),
+        ("bubble", 42.0, 72.0, 120.0, 0.72, 0.7, 1),
+        ("chunk", 58.0, 0.0, 0.0, 1.0, 1.0, 1),
+        ("kite", 54.0, 96.0, 170.0, 0.82, 0.86, 1),
+        ("honey", 72.0, 0.0, 0.0, 1.38, 1.28, 3),
+        ("dart", 48.0, 128.0, 210.0, 0.62, 1.08, 5),
+        ("loaf", 86.0, 0.0, 0.0, 1.65, 1.45, 7),
+        ("prism", 64.0, 82.0, 180.0, 1.15, 1.05, 4),
+        ("sentinel", 82.0, 38.0, 100.0, 1.9, 1.5, 9),
+        ("bastion", 100.0, 24.0, 80.0, 2.65, 1.8, 15),
     ];
-    let index = rng.random_range(0..variants.len());
-    let (v, size, speed, roam, hp_scale, damage_scale) = variants[index];
-    let level = rng.random_range(0..3) as u8;
+    let weights: Vec<f32> = variants
+        .iter()
+        .map(|v| enemy_variant_weight(player_level, v.6))
+        .collect();
+    let index = weighted_index(&weights, rng.random());
+    let (v, size, speed, roam, hp_scale, damage_scale, _) = variants[index];
+    let level = weighted_index(&enemy_tier_weights(player_level), rng.random()) as u8;
     let base_hp = [24.0, 52.0, 95.0][level as usize];
     let base_damage = [2.0, 4.5, 8.0][level as usize];
     let angle = rng.random_range(0.0..std::f32::consts::TAU);
@@ -1060,6 +1230,10 @@ async fn world_snapshot(room: &Room) -> ServerMessage {
                 y: e.y,
                 health: e.health,
                 max_health: e.max_health,
+                charging: world
+                    .enemy_attacks
+                    .get(&e.id)
+                    .is_some_and(|(_, charge)| *charge > 0),
             })
             .collect(),
         projectiles: world
@@ -1170,8 +1344,14 @@ fn enemy_outline(enemy: &Enemy) -> Vec<Point> {
             (-r * 0.42, 0.0),
             (-r * 0.72, r * 0.72),
         ],
-        "kite" | "honey" => {
-            let sides = if enemy.variant == "kite" { 4 } else { 6 };
+        "kite" | "honey" | "prism" | "sentinel" | "bastion" => {
+            let sides = match enemy.variant.as_str() {
+                "kite" => 4,
+                "prism" => 3,
+                "sentinel" => 5,
+                "bastion" => 8,
+                _ => 6,
+            };
             (0..sides)
                 .map(|i| {
                     let angle = -std::f32::consts::FRAC_PI_2
@@ -1634,16 +1814,16 @@ mod tests {
             &spec,
             0.0,
         );
-        update_projectiles(&mut world, &HashMap::new());
+        update_projectiles(&mut world, &mut HashMap::new());
         assert_eq!(world.stats.hits, 2);
         assert_eq!(
             world.enemies.iter().map(|e| e.health).collect::<Vec<_>>(),
             vec![58.0, 58.0, 100.0, 100.0, 100.0]
         );
-        update_projectiles(&mut world, &HashMap::new());
+        update_projectiles(&mut world, &mut HashMap::new());
         assert_eq!(world.stats.hits, 2);
         for _ in 0..5 {
-            update_projectiles(&mut world, &HashMap::new());
+            update_projectiles(&mut world, &mut HashMap::new());
         }
         assert!(world.projectiles.is_empty());
     }
@@ -1705,6 +1885,113 @@ mod tests {
             }
         }
         assert!(!p.spend("health"));
+    }
+    #[test]
+    fn enemy_difficulty_grows_without_removing_easy_targets() {
+        let mut previous = enemy_tier_weights(1);
+        for level in 1..=26 {
+            let weights = enemy_tier_weights(level);
+            assert!((weights.iter().sum::<f32>() - 1.0).abs() < 0.0001);
+            assert!(weights[0] >= 0.119 && weights[0] <= previous[0]);
+            assert!(weights[2] >= previous[2]);
+            previous = weights;
+        }
+        assert_eq!(enemy_tier_weights(1)[2], 0.0);
+        assert!((enemy_tier_weights(26)[2] - 0.6).abs() < 0.0001);
+        for (level, allowed) in [
+            (1, vec!["bubble", "chunk", "kite"]),
+            (3, vec!["bubble", "chunk", "kite", "honey"]),
+        ] {
+            let mut world = World::default();
+            for _ in 0..200 {
+                spawn_enemy(&mut world, 0.0, 0.0, level);
+            }
+            assert!(
+                world
+                    .enemies
+                    .iter()
+                    .all(|e| allowed.contains(&e.variant.as_str()))
+            );
+            assert!(world.enemies.iter().all(|e| e.level < 2));
+        }
+        let weights: Vec<f32> = [1, 1, 1, 3, 5, 7, 4, 9, 15]
+            .iter()
+            .map(|unlock| enemy_variant_weight(26, *unlock))
+            .collect();
+        for i in 0..9 {
+            assert!((0..1000).any(|r| weighted_index(&weights, r as f32 / 1000.0) == i));
+        }
+    }
+    #[test]
+    fn armed_enemies_warn_before_firing_and_hostile_shots_damage_players_once() {
+        let mut world = World::default();
+        world.enemies.push(Enemy {
+            id: "armed".into(),
+            variant: "prism".into(),
+            level: 0,
+            x: 330.0,
+            y: 0.0,
+            home_x: 330.0,
+            home_y: 0.0,
+            health: 100.0,
+            max_health: 100.0,
+            size: 64.0,
+            speed: 0.0,
+            roam: 0.0,
+            phase: 0.0,
+            contact_damage: 0.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
+        });
+        let (tx, _) = mpsc::channel(4);
+        let mut tank = build();
+        tank.attachments.clear();
+        let mut players = HashMap::from([(
+            "one".into(),
+            ConnectedPlayer {
+                state: PlayerState {
+                    id: "one".into(),
+                    build: tank,
+                    x: 0.0,
+                    y: 0.0,
+                    rotation: 0.0,
+                    health: 100.0,
+                    max_health: 100.0,
+                    progression: Progression::default(),
+                },
+                sender: tx,
+                firing: false,
+                last_fire: HashMap::new(),
+                last_damage: 0,
+                impact_speed: 0.0,
+                last_state_received: std::time::Instant::now(),
+            },
+        )]);
+        update_enemy_attacks(&mut world, &players);
+        world.elapsed = 2000;
+        update_enemy_attacks(&mut world, &players);
+        assert_eq!(world.enemy_attacks["armed"].1, 2000);
+        assert!(world.projectiles.is_empty());
+        world.elapsed = 2499;
+        update_enemy_attacks(&mut world, &players);
+        assert!(world.projectiles.is_empty());
+        world.elapsed = 2500;
+        update_enemy_attacks(&mut world, &players);
+        assert_eq!(world.projectiles.len(), 1);
+        for _ in 0..40 {
+            world.elapsed += TICK_MS;
+            update_projectiles(&mut world, &mut players);
+        }
+        assert_eq!(players["one"].state.health, 96.0);
+        assert!(world.projectiles.is_empty());
+        world.enemies[0].health = 0.0;
+        world.elapsed = 10000;
+        update_enemy_attacks(&mut world, &players);
+        assert!(world.projectiles.is_empty());
+        assert!(world.enemy_attacks.is_empty());
+        assert!(enemy_weapon("bubble").is_none());
+        assert_eq!(enemy_weapon("sentinel").unwrap().1, 2);
+        assert_eq!(enemy_weapon("bastion").unwrap().1, 3);
     }
     #[test]
     fn magnets_pull_only_within_reach_and_stack() {

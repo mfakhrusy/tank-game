@@ -395,3 +395,61 @@ test('destroying shapes earns levels, hull upgrades apply, and each run starts f
   await page.getByRole('button',{name:/Test this thing/}).click();
   await expect(page.getByText('Level 1',{exact:true})).toBeVisible();
 });
+
+test('armed enemies telegraph before firing dodgeable shots that damage the actual tank',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create;
+      TestScene.prototype.create=function(){create.call(this);window.__enemyScene=this;};
+    `});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.waitForFunction(()=>!!(window as any).__enemyScene);
+  await page.evaluate(()=>{
+    const scene=(window as any).__enemyScene;
+    for(const group of [scene.blocks,scene.staticBlocks])for(const b of [...group.getChildren()])b.destroy();
+    scene.tank.body.reset(0,0);
+    const enemy=scene.createBlock(330,0,0,6);enemy.moveSpeed=0;enemy.setVelocity(0,0);enemy.nextAttack=scene.time.now+300;
+    (window as any).__attacker=enemy;
+  });
+  await expect.poll(()=>page.evaluate(()=>(window as any).__attacker.windupAt>0)).toBe(true);
+  expect(await page.evaluate(()=>(window as any).__enemyScene.enemyShots.getLength())).toBe(0);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__enemyScene.enemyShots.getLength())).toBeGreaterThan(0);
+  await expect(page.getByRole('region',{name:'Health 66 of 70'})).toBeVisible();
+  await page.evaluate(()=>{
+    const scene=(window as any).__enemyScene;
+    for(const [i,index] of [6,7,8].entries()){
+      const b=scene.createBlock(-330+i*300,-160,2,index);b.moveSpeed=0;b.setVelocity(0,0);b.nextAttack=Infinity;
+    }
+  });
+  await page.screenshot({path:'/tmp/tank-armed-enemies.png'});
+});
+
+test('levelled spawns add tougher armed enemies while retaining weak targets and visible shapes',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create;
+      TestScene.prototype.create=function(){create.call(this);window.__spawnScene=this;window.__raiseLevel=()=>useGameStore.getState().awardXp(100000);};
+    `});
+  });
+  await page.goto('/');await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.waitForFunction(()=>!!(window as any).__spawnScene);
+  const result=await page.evaluate(()=>{
+    const scene=(window as any).__spawnScene,visible=scene.staticBlocks.getChildren().find((b:any)=>b.x===260&&b.y===0);
+    const before=[...scene.blocks.getChildren(),...scene.staticBlocks.getChildren()];
+    (window as any).__raiseLevel();
+    scene.refreshEnemySpawns(scene.time.now+3000);
+    const unchanged=visible.active&&visible.spawnLevel===1;
+    const generated:any[]=[];
+    for(let i=20;i<40;i++){const key=`${i},20`;scene.generateChunk(i,20,key);generated.push(...scene.chunks.get(key));}
+    return {unchanged,early:before.map((b:any)=>({kind:b.kind,variant:b.variantId})),late:generated.map(b=>({kind:b.kind,variant:b.variantId}))};
+  });
+  expect(result.unchanged).toBe(true);
+  expect(result.early.every(b=>['bubble','chunk','kite'].includes(b.variant)&&b.kind<2)).toBe(true);
+  expect(result.late.some(b=>b.kind===2)).toBe(true);
+  expect(result.late.some(b=>b.kind===0)).toBe(true);
+  for(const id of ['prism','sentinel','bastion'])expect(result.late.some(b=>b.variant===id)).toBe(true);
+});

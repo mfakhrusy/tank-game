@@ -95,12 +95,12 @@ test('a multiplayer tank stops at a visible shape and receives server contact da
   await expect(page.getByText('1 player connected')).toBeVisible();
   await page.waitForFunction(()=>{
     const scene=(window as any).__collisionScene;
-    return scene&&[...scene.networkEnemies.values()].some((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(enemy.image.texture.key));
+    return scene&&[...scene.networkEnemies.values()].some((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(String(enemy.image.frame.name)));
   });
   const fullHealth=await page.locator('.hp-card span').textContent();
   await page.evaluate(()=>{
     const scene=(window as any).__collisionScene;
-    const enemy=[...scene.networkEnemies.values()].find((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(enemy.image.texture.key)) as any;
+    const enemy=[...scene.networkEnemies.values()].find((enemy:any)=>/enemy-(chunk|honey|loaf)-/.test(String(enemy.image.frame.name))) as any;
     (window as any).__contactTarget=enemy.image;
     (scene.tank.body as any).reset(enemy.image.x-170,enemy.image.y);
     scene.input.activePointer.positionToCamera=()=>({x:scene.tank.x+1000,y:scene.tank.y});
