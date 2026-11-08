@@ -1,6 +1,6 @@
 export type PartKind = 'shooter' | 'mover' | 'shell' | 'gadget';
 export type MountIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-export type ShooterBehavior = 'popper' | 'bonker' | 'sprinkler' | 'boomerang' | 'wiggler' | 'splitter' | 'ricochet';
+export type ShooterBehavior = 'popper' | 'bonker' | 'sprinkler' | 'boomerang' | 'wiggler' | 'splitter' | 'ricochet' | 'railgun';
 
 export type Part = {
   id: string;
@@ -75,6 +75,7 @@ export const PARTS: Part[] = [
   { id: 'wiggler', kind: 'shooter', name: 'Wiggler', kidLabel: 'S-curving shots', description: 'Its glowing pellets weave left and right through the yard.', icon: '〰', cost: 3, color: 0x30b27a, shape: 'pod', behavior: 'wiggler', stats: { damage: 11, fireRate: 2.2, projectileSpeed: 410, projectileSize: 8, burst: 1, spread: 0 } },
   { id: 'splitter', kind: 'shooter', name: 'Splitter', kidLabel: 'One becomes three', description: 'The shell travels forward, then bursts into three smaller shots.', icon: '◆', cost: 4, color: 0xe7658c, shape: 'pod', behavior: 'splitter', stats: { damage: 13, fireRate: 1.4, projectileSpeed: 380, projectileSize: 11, burst: 1, spread: 0 } },
   { id: 'ricochet', kind: 'shooter', name: 'Block Bouncer', kidLabel: 'Bounces off blocks', description: 'Square shots ricochet away after hitting a block.', icon: '◇', cost: 3, color: 0xf6c453, shape: 'barrel', behavior: 'ricochet', stats: { damage: 12, fireRate: 1.8, projectileSpeed: 440, projectileSize: 8, burst: 1, spread: 0 } },
+  { id: 'railgun', kind: 'shooter', name: 'Railgun', kidLabel: 'Instant piercing laser', description: 'A long cyan beam pierces every shape in its path. Powerful, with a slow recharge.', icon: '━', cost: 5, color: 0x39d9df, shape: 'barrel', behavior: 'railgun', stats: { damage: 42, fireRate: 0.75, projectileSpeed: 1100, projectileSize: 6, burst: 1, spread: 0 } },
   { id: 'wheel', kind: 'mover', name: 'Zippy Wheel', kidLabel: 'More speed', description: 'Add several for a super-fast build.', icon: '◉', cost: 2, color: 0x30b27a, shape: 'wheel', stats: { speed: 32, acceleration: 120 } },
   { id: 'rocket', kind: 'mover', name: 'Back Booster', kidLabel: 'Forward blast', description: 'Put it on the back socket to blast forward.', icon: '▲', cost: 3, color: 0xff725e, shape: 'booster', stats: { speed: 18, thrust: 520 } },
   { id: 'twin-booster', kind: 'mover', name: 'Twin Booster', kidLabel: 'Double flames', description: 'A wide two-nozzle booster with a mighty push.', icon: '▲▲', cost: 4, color: 0x936ee8, shape: 'booster', stats: { speed: 28, thrust: 760 } },

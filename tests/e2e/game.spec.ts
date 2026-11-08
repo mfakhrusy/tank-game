@@ -256,3 +256,71 @@ test('a smasher can knock one shape into another and reveal both health bars',as
     return b.active&&b.hp<b.maxHp&&b.x>331&&scene.healthBars.get(b)?.visible&&scene.healthBars.get((window as any).__firstShape)?.visible;
   }),{timeout:4000}).toBe(true);
 });
+
+test('a full build can remove modules directly from its preview and undo without horizontal scrolling',async({page})=>{
+  await page.addInitScript(()=>{if(!localStorage.getItem('snap-tank-build-v2'))localStorage.setItem('snap-tank-build-v2',JSON.stringify({version:2,state:{build:{version:2,name:'Full tank',color:'#5b7cfa',attachments:Array.from({length:16},(_,i)=>({uid:`module-${i}`,partId:'popper',mount:Math.floor(i/2),layer:i%2}))}}}));});
+  await page.goto('/');
+  await expect(page.locator('.attached-chip')).toHaveCount(16);
+  const inventory=page.locator('.module-grid');
+  expect(await inventory.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await page.getByRole('button',{name:'Remove parts',exact:true}).click();
+  const module=page.getByRole('button',{name:'Remove Popper, socket 8, outer layer',exact:true});
+  await module.focus();await module.press('Enter');
+  await expect(page.locator('.attached-chip')).toHaveCount(15);
+  await expect(page.getByRole('button',{name:'Undo remove',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Undo remove',exact:true})).toBeFocused();
+  await page.getByRole('button',{name:'Undo remove',exact:true}).click();
+  await expect(page.locator('.attached-chip')).toHaveCount(16);
+  const socket=page.getByRole('region',{name:'Socket 8 modules',exact:true});
+  await socket.locator('.attached-chip').filter({hasText:'Outer layer'}).getByRole('button',{name:'Remove Popper',exact:true}).click();
+  await expect(socket.locator('.attached-chip')).toHaveCount(1);
+  await expect(socket).toContainText('Inner layer');
+  await page.reload();await expect(page.locator('.attached-chip')).toHaveCount(15);
+});
+
+test('module removal stays usable on mobile and selecting a new part returns to add mode',async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await page.goto('/');
+  await page.getByRole('button',{name:'Remove parts',exact:true}).click();
+  await page.getByRole('button',{name:'Remove Popper, socket 1, inner layer',exact:true}).click();
+  await expect(page.locator('.attached-chip')).toHaveCount(3);
+  await page.getByRole('button',{name:'Undo remove',exact:true}).click();
+  await page.locator('.parts-panel').getByRole('button',{name:/Popper/}).click();
+  await expect(page.getByRole('button',{name:'Add & swap',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('button',{name:'Socket 1, 1 of 2 layers',exact:true})).toBeEnabled();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  expect(await page.locator('.module-grid').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+});
+
+test('railgun pierces aligned shapes once and leaves nearby misses untouched',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const originalCreate=TestScene.prototype.create;
+      TestScene.prototype.create=function(){originalCreate.call(this);window.__railScene=this;};
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Railgun/}).click();
+  await page.getByRole('button',{name:'Socket 1, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.waitForFunction(()=>!!(window as any).__railScene);
+  await page.evaluate(()=>{
+    const scene=(window as any).__railScene;
+    for(const group of [scene.blocks,scene.staticBlocks])for(const block of [...group.getChildren()])block.destroy();
+    scene.tank.body.reset(0,0);
+    scene.input.activePointer.positionToCamera=()=>({x:1000,y:0});
+    (window as any).__railTargets=[[300,0],[600,0],[450,80],[1300,0]].map(([x,y])=>{
+      const block=scene.createBlock(x,y,0,1);block.hp=block.maxHp=100;return block;
+    });
+    const show=scene.showRailBeam.bind(scene);
+    scene.showRailBeam=(...args:any[])=>{show(...args);(window as any).__beamSeen=true;};
+  });
+  await page.mouse.down();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__beamSeen)).toBe(true);
+  await page.mouse.up();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__railTargets.map((b:any)=>b.hp))).toEqual([58,58,100,100]);
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(()=>(window as any).__railTargets.map((b:any)=>b.hp))).toEqual([58,58,100,100]);
+});

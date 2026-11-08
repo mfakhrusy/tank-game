@@ -1,12 +1,14 @@
 import Phaser from 'phaser';
+import { coreArt } from './moduleArt';
+import { bakeArtwork, bakeModuleAtlas } from './renderArtwork';
 import { NetworkMotion, interpolatePosition, interpolateRotation, RenderFrames } from './networkMotion';
 import { magnetPullDistance } from './magnet';
-import { tankOutline, blockOutline, tankBlockContact, circleOutline } from './collision';
+import { beamHitsOutline, tankOutline, blockOutline, tankBlockContact, circleOutline } from './collision';
 import { Attachment, ShooterBehavior, TankBuild, WeaponSpec, boosterThrustForDirection, calculateStats, getPart, shouldBoomerangReturn, shouldSplitterBurst, wigglerHeading } from './config';
 import { useGameStore } from '../store';
 import { BLOCKS_PER_CHUNK, CHUNK_SIZE, WORLD_LIMIT, chunkAt, createChunkRandom, rectangularChunkWindow } from './world';
 import { canAutoRepair, repairAmount, smasherKnockback, ramImpactDamage, shapeImpactDamage } from './combat';
-import { CORE_RADIUS, LAYER_RADII, attachmentPose, attachmentTransform, contraptionRadius, occupiedMountDepths } from './geometry';
+import { CORE_RADIUS, LAYER_RADII, attachmentTransform, contraptionRadius, occupiedMountDepths } from './geometry';
 import { ENEMY_VARIANTS, EnemyShape, enemyCombatStats, enemyVariant, enemyVelocity } from './enemies';
 import { LocalNetworkState, NetworkEnemy, NetworkPlayer, NetworkProjectile, WorldSnapshot } from '../multiplayer';
 
@@ -118,48 +120,22 @@ export class TestScene extends Phaser.Scene {
     }
     const ordered = [...build.attachments].sort((a,b)=>b.layer-a.layer);
     ordered.forEach(item => this.addPartShape(container,item,trackBoosters));
-    container.add(this.add.circle(0,0,CORE_RADIUS+8,0x29324a));
-    container.add(this.add.circle(0,0,CORE_RADIUS,Phaser.Display.Color.HexStringToColor(build.color).color));
-    container.add(this.add.circle(0,0,29,0xf8f3e8).setStrokeStyle(7,0x29324a));
-    const badge=this.add.graphics().lineStyle(8,Phaser.Display.Color.HexStringToColor(build.color).color,1).beginPath().moveTo(-12,3).lineTo(-4,11).lineTo(14,-12).strokePath();
-    container.add(badge);
-    for(const item of build.attachments){const bolt=attachmentPose(item.mount,item.layer,-28);container.add(this.add.circle(bolt.x,bolt.y,5,0xf6c453).setStrokeStyle(3,0x29324a));}
+    const coreKey=`core-${build.color}`;
+    bakeArtwork(this,coreKey,coreArt(build.color));
+    container.add(this.add.image(0,0,coreKey).setScale(.5));
     return container;
   }
 
   private addPartShape(container: Phaser.GameObjects.Container,item:Attachment,trackBoosters:boolean) {
     const part=getPart(item.partId),pose=attachmentTransform(item.mount,item.layer);
     const shape=this.add.container(pose.x,pose.y).setRotation(pose.angle).setScale(pose.scale);container.add(shape);
-    const polygon=(points:number[],color:number,stroke?:number,width=0)=>{const graphic=this.add.graphics().fillStyle(color,1);const vertices=[];for(let i=0;i<points.length;i+=2)vertices.push(new Phaser.Math.Vector2(points[i],points[i+1]));graphic.fillPoints(vertices,true);if(stroke!==undefined)graphic.lineStyle(width,stroke,1).strokePoints(vertices,true);return graphic;};
-    if(part.shape==='barrel'){
-      const outerHeight=part.behavior==='bonker'?34:26,innerHeight=part.behavior==='bonker'?22:16;
-      shape.add(this.add.rectangle(19,0,58,outerHeight,0x29324a).setOrigin(.5));
-      shape.add(this.add.rectangle(19,0,48,innerHeight,part.color).setOrigin(.5));
-      if(part.behavior==='ricochet')shape.add(this.add.rectangle(44,0,20,20,0x29324a).setOrigin(.5));else shape.add(this.add.circle(43,0,9,0x29324a));
-      shape.add(this.add.circle(43,0,5,0xffffff,.25));
-    }else if(part.shape==='pod'){
-      shape.add(polygon([-15,-18,24,-18,46,0,24,18,-15,18],0x29324a));
-      shape.add(polygon([-9,-12,21,-12,37,0,21,12,-9,12],part.color));
-      if(part.behavior==='sprinkler')for(const [px,py] of [[25,-8],[32,0],[25,8]])shape.add(this.add.circle(px,py,5,0x29324a));
-      if(part.behavior==='boomerang')shape.add(this.add.arc(8,0,13,35,325,false,0xf8f3e8).setStrokeStyle(4,0x29324a));
-      if(part.behavior==='wiggler'){const wave=this.add.graphics().lineStyle(5,0xffffff,1).beginPath().moveTo(-1,8);for(let i=1;i<=16;i++)wave.lineTo(-1+i*2,8-Math.sin(i*Math.PI/4)*9);wave.strokePath();shape.add(wave);}
-      if(part.behavior==='splitter')shape.add(polygon([9,0,20,-11,31,0,20,11],0xf8f3e8,0x29324a,3));
-    }else if(part.shape==='booster'){
-      shape.add(polygon([-28,-19,11,-19,31,-10,31,10,11,19,-28,19],0x29324a));
-      shape.add(polygon([-21,-12,8,-12,23,-5,23,5,8,12,-21,12],part.color));
-      shape.add(this.add.rectangle(27.5,0,15,30,0x29324a).setOrigin(.5));
-      const flame=this.add.container(47,0).setAlpha(.3).setScale(.55);flame.add(polygon([-12,-9,12,0,-12,9],0xf6c453,0x29324a,4));flame.add(polygon([-9,-4,6,0,-9,4],0xff725e));shape.add(flame);if(trackBoosters)this.boosterFlames.set(item.uid,flame);
-    }else if(part.shape==='plate'){
-      shape.add(polygon([-18,-28,17,-28,30,-20,38,-7,38,7,30,20,17,28,-18,28],0x29324a));
-      shape.add(polygon([-13,-21,15,-21,25,-14,31,-5,31,5,25,14,15,21,-13,21],part.color));
-      shape.add(this.add.rectangle(2,-14,14,5,0xffffff,.35).setOrigin(.5));
-    }else if(part.shape==='wheel'){
-      shape.add(this.add.ellipse(4,0,62,44,0x29324a));shape.add(this.add.ellipse(4,0,46,30,part.color));shape.add(this.add.circle(4,0,7,0xffffff,.4));
-      shape.add(this.add.rectangle(-13,0,4,22,0x29324a));shape.add(this.add.rectangle(21,0,4,22,0x29324a));
-    }else if(part.shape==='spike'){
-      shape.add(polygon([-25,-22,38,0,-25,22],0x29324a));shape.add(polygon([-17,-13,27,0,-17,13],part.color));shape.add(polygon([-5,-7,41,0,-5,7,9,0],0xf8f3e8,0x29324a,3));
-    }else{
-      shape.add(this.add.circle(2,0,25,0x29324a));shape.add(this.add.circle(2,0,18,part.color));shape.add(this.add.circle(-4,-6,6,0xffffff,.45));shape.add(this.add.text(3,0,part.icon,{fontFamily:'Arial Black',fontSize:'17px',color:'#29324a'}).setOrigin(.5));
+    bakeModuleAtlas(this);
+    shape.add(this.add.image(0,0,'module-atlas',part.id).setScale(.5));
+    if(part.shape==='booster'){
+      const flameKey=`flame-${part.id}`;
+      const flame=this.add.container(35,0).setAlpha(.3).setScale(.55);
+      flame.add(this.add.image(0,0,'module-atlas',flameKey).setScale(.5));shape.add(flame);
+      if(trackBoosters)this.boosterFlames.set(item.uid,flame);
     }
   }
 
@@ -167,6 +143,19 @@ export class TestScene extends Phaser.Scene {
     if(time-(this.lastShots.get(weapon.uid)??0)<1000/weapon.fireRate)return 0;
     this.lastShots.set(weapon.uid,time);
     const mountAngle=weapon.mount*Math.PI/4, base=aim+mountAngle, radius=LAYER_RADII[weapon.layer]+30;
+    if(weapon.behavior==='railgun'){
+      const x=this.tank.x+Math.cos(base)*radius,y=this.tank.y+Math.sin(base)*radius;
+      this.showRailBeam(x,y,base,weapon.projectileSpeed);
+      for(const object of [...this.blocks.getChildren(),...this.staticBlocks.getChildren()]){
+        const block=object as Block;
+        if(!block.active||!beamHitsOutline(x,y,base,weapon.projectileSpeed,block.outline,block.x,block.y,block.rotation))continue;
+        block.hp-=weapon.damage;this.pendingHits++;
+        block.setTint(0xffffff);this.time.delayedCall(70,()=>block.active&&block.clearTint());
+        this.pop(block.x,block.y,weapon.color,4);
+        if(block.hp<=0)this.destroyBlock(block);
+      }
+      return 1;
+    }
     let fired=0;
     for(let i=0;i<weapon.burst;i++){
       const offset=(i-(weapon.burst-1)/2)*weapon.spread,shotAngle=base+offset;
@@ -174,6 +163,11 @@ export class TestScene extends Phaser.Scene {
       if(bullet)fired+=1;
     }
     return fired;
+  }
+
+  private showRailBeam(x:number,y:number,angle:number,length:number){
+    const beam=this.add.image(x,y,'rail-beam').setOrigin(0,.5).setRotation(angle).setDisplaySize(length,16).setDepth(4);
+    this.tweens.add({targets:beam,alpha:0,scaleY:beam.scaleY*.3,duration:180,onComplete:()=>beam.destroy()});
   }
 
   private spawnProjectile(x:number,y:number,angle:number,speed:number,damage:number,size:number,color:number,behavior:ShooterBehavior,time:number){
@@ -276,11 +270,13 @@ export class TestScene extends Phaser.Scene {
       const rotation=interpolateRotation(projectile.rotation,next?.rotation??projectile.rotation,frame.alpha);
       let current=this.networkProjectiles.get(projectile.id);
       if(!current){
-        const texture=projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
+        const texture=projectile.behavior==='railgun'?'rail-beam':projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
         const image=this.add.image(position.x,position.y,texture).setTint(projectile.color).setScale(projectile.size/10).setDepth(4);
+        if(projectile.behavior==='railgun')image.setOrigin(0,.5).setDisplaySize(projectile.length??1100,16).clearTint();
         current={image,targetX:position.x,targetY:position.y,targetRotation:rotation};this.networkProjectiles.set(projectile.id,current);
       }
       current.image.setPosition(position.x,position.y).setRotation(rotation);
+      if(projectile.behavior==='railgun')current.image.setAlpha(Math.max(0,1-(projectile.ageMs??0)/180));
     }
     for(const [id,projectile] of this.networkProjectiles)if(!frame.from.projectiles.has(id)){projectile.image.destroy();this.networkProjectiles.delete(id);}
   }
@@ -313,6 +309,7 @@ export class TestScene extends Phaser.Scene {
     const body=this.make.graphics({x:0,y:0});body.fillStyle(0xffffff).fillCircle(150,150,145).generateTexture('machine-body',300,300);body.destroy();
     const ball=this.make.graphics({x:0,y:0});ball.fillStyle(0x29324a).fillCircle(11,11,11).fillStyle(0xffffff).fillCircle(11,11,7).generateTexture('bullet',22,22);ball.clear().fillStyle(0x29324a).fillRoundedRect(1,1,20,20,4).fillStyle(0xffffff).fillRoundedRect(5,5,12,12,2).generateTexture('bullet-square',22,22);ball.clear().lineStyle(7,0x29324a).beginPath().arc(12,12,9,.45,Math.PI*2-.45).strokePath().lineStyle(3,0xffffff).beginPath().arc(12,12,8,.5,Math.PI*2-.5).strokePath().generateTexture('bullet-boomerang',24,24);ball.destroy();
     ENEMY_VARIANTS.forEach(variant=>{for(let kind=0;kind<3;kind++)this.makeEnemyTexture(variant.id,variant.shape,variant.size,variant.color,kind);});
+    const rail=this.make.graphics({x:0,y:0});rail.fillStyle(0x39d9df,.18).fillRect(0,0,64,16).fillStyle(0x39d9df,.7).fillRect(0,5,64,6).fillStyle(0xeaffff).fillRect(0,7,64,2).generateTexture('rail-beam',64,16);rail.destroy();
     const bit=this.make.graphics({x:0,y:0});bit.fillStyle(0xffffff).fillCircle(4,4,4).generateTexture('bit',8,8);bit.destroy();
   }
   private makeEnemyTexture(id:string,shape:EnemyShape,size:number,color:number,kind:number){

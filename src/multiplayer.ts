@@ -11,7 +11,7 @@ export type NetworkPlayer = {
 };
 
 export type NetworkEnemy={id:string;variant:string;level:number;x:number;y:number;health:number;maxHealth:number};
-export type NetworkProjectile={id:string;ownerId:string;behavior:string;x:number;y:number;rotation:number;size:number;color:number};
+export type NetworkProjectile={id:string;ownerId:string;behavior:string;x:number;y:number;rotation:number;size:number;color:number;length?:number;ageMs?:number};
 export type RoomStats={blocks:number;shots:number;hits:number};
 export type WorldSnapshot={revision:number;players:NetworkPlayer[];enemies:NetworkEnemy[];projectiles:NetworkProjectile[];stats:RoomStats};
 export type LocalNetworkState = Pick<NetworkPlayer,'x'|'y'|'rotation'>&{firing:boolean};

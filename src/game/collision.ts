@@ -76,3 +76,20 @@ export function tankBlockContact(outline:Polygon[],x:number,y:number,rotation:nu
   for(const shape of outline.flatMap(convexPieces))for(const target of targets){const offset=separation(transform(shape,x,y,rotation),target);if(offset&&(!result||Math.hypot(offset.x,offset.y)>Math.hypot(result.x,result.y)))result=offset;}
   return result;
 }
+
+// Test a finite beam against the actual rotated outline, including concave shapes.
+export function beamHitsOutline(x:number,y:number,angle:number,range:number,outline:Polygon,targetX:number,targetY:number,rotation:number):boolean {
+  const c=Math.cos(angle),s=Math.sin(angle);
+  const points=transform(outline,targetX,targetY,rotation).map(p=>({x:(p.x-x)*c+(p.y-y)*s,y:-(p.x-x)*s+(p.y-y)*c}));
+  let inside=false;
+  for(let i=0,j=points.length-1;i<points.length;j=i++){
+    const a=points[j],b=points[i];
+    if((a.y>0)!==(b.y>0)){
+      const hit=a.x+(b.x-a.x)*(-a.y)/(b.y-a.y);
+      if(hit>=0&&hit<=range)return true;
+      if(hit<0)inside=!inside;
+    }
+    if(Math.abs(a.y)<1e-6&&a.x>=0&&a.x<=range)return true;
+  }
+  return inside;
+}

@@ -115,3 +115,29 @@ test('a multiplayer tank stops at a visible shape and receives server contact da
   expect(distance).toBeLessThan(170);
   await page.getByRole('button',{name:'Leave room',exact:true}).click();
 });
+
+test('multiplayer renders the authoritative railgun beam',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const render=TestScene.prototype.syncNetworkProjectiles;
+      TestScene.prototype.syncNetworkProjectiles=function(frame){
+        render.call(this,frame);
+        for(const entry of this.networkProjectiles.values()){
+          if(entry.image.texture.key==='rail-beam')window.__railBeamWidth=entry.image.displayWidth;
+        }
+      };
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Railgun/}).click();
+  await page.getByRole('button',{name:'Socket 1, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:'Create a room',exact:true}).click();
+  await expect(page.getByText('1 player connected')).toBeVisible();
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__railBeamWidth)).toBe(1100);
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await page.getByRole('button',{name:'Leave room',exact:true}).click();
+});

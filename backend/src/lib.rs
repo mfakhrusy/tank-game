@@ -80,6 +80,10 @@ pub struct ProjectileState {
     pub rotation: f32,
     pub size: f32,
     pub color: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_ms: Option<u64>,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -645,6 +649,26 @@ fn update_projectiles(world: &mut World, players: &HashMap<String, ConnectedPlay
     let now = world.elapsed;
     let mut children = Vec::new();
     for projectile in &mut world.projectiles {
+        if projectile.behavior == "railgun" {
+            if projectile.age == 0 {
+                for enemy in &mut world.enemies {
+                    if enemy.health > 0.0
+                        && beam_hits_enemy(
+                            projectile.x,
+                            projectile.y,
+                            projectile.rotation,
+                            projectile.base_speed,
+                            enemy,
+                        )
+                    {
+                        enemy.health -= projectile.damage;
+                        world.stats.hits += 1;
+                    }
+                }
+            }
+            projectile.age += TICK_MS;
+            continue;
+        }
         projectile.age += TICK_MS;
         if projectile.behavior == "boomerang" && projectile.age >= 480 {
             if let Some(owner) = players.get(&projectile.owner_id) {
@@ -730,6 +754,17 @@ struct WeaponSpec {
 }
 fn weapon_spec(id: &str) -> Option<WeaponSpec> {
     Some(match id {
+        "railgun" => WeaponSpec {
+            behavior: "railgun",
+            damage: 42.0,
+            fire_rate: 0.75,
+            speed: 1100.0,
+            size: 6.0,
+            spread: 0.0,
+            burst: 1,
+            color: 0x39d9df,
+            lifetime: 180,
+        },
         "popper" => WeaponSpec {
             behavior: "popper",
             damage: 9.0,
@@ -944,6 +979,8 @@ async fn world_snapshot(room: &Room) -> ServerMessage {
                 rotation: p.rotation,
                 size: p.size,
                 color: p.color,
+                length: (p.behavior == "railgun").then_some(p.base_speed),
+                age_ms: (p.behavior == "railgun").then_some(p.age),
             })
             .collect(),
         stats: world.stats.clone(),
@@ -997,6 +1034,38 @@ pub fn valid_build(build: &TankBuild) -> bool {
         })
 }
 type Point = (f32, f32);
+fn beam_hits_enemy(x: f32, y: f32, angle: f32, range: f32, enemy: &Enemy) -> bool {
+    let points = transform_outline(&enemy_outline(enemy), enemy.x, enemy.y, 0.0, 1.0);
+    let (c, s) = (angle.cos(), angle.sin());
+    let points: Vec<Point> = points
+        .iter()
+        .map(|p| {
+            (
+                (p.0 - x) * c + (p.1 - y) * s,
+                -(p.0 - x) * s + (p.1 - y) * c,
+            )
+        })
+        .collect();
+    let mut inside = false;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        if (a.1 > 0.0) != (b.1 > 0.0) {
+            let hit = a.0 + (b.0 - a.0) * (-a.1) / (b.1 - a.1);
+            if hit >= 0.0 && hit <= range {
+                return true;
+            }
+            if hit < 0.0 {
+                inside = !inside;
+            }
+        }
+        if a.1.abs() < 1e-6 && a.0 >= 0.0 && a.0 <= range {
+            return true;
+        }
+    }
+    inside
+}
+
 fn enemy_outline(enemy: &Enemy) -> Vec<Point> {
     let r = enemy.size * 0.5;
     match enemy.variant.as_str() {
@@ -1167,7 +1236,7 @@ fn tank_outline(build: &TankBuild, x: f32, y: f32, rotation: f32) -> Vec<Vec<Poi
     }
     for a in &build.attachments {
         let shape = match a.part_id.as_str() {
-            "popper" | "bonker" | "ricochet" => box_outline(
+            "popper" | "bonker" | "ricochet" | "railgun" => box_outline(
                 19.0,
                 0.0,
                 58.0,
@@ -1421,6 +1490,66 @@ mod tests {
                 layer: 0,
             }],
         }
+    }
+    #[test]
+    fn railgun_pierces_only_shapes_on_the_finite_beam_and_damages_once() {
+        let enemy = |id: &str, x: f32, y: f32| Enemy {
+            id: id.into(),
+            variant: "bubble".into(),
+            level: 0,
+            x,
+            y,
+            home_x: x,
+            home_y: y,
+            health: 100.0,
+            max_health: 100.0,
+            size: 42.0,
+            speed: 0.0,
+            roam: 0.0,
+            phase: 0.0,
+            contact_damage: 0.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
+        };
+        let mut world = World {
+            enemies: vec![
+                enemy("near", 200.0, 0.0),
+                enemy("far", 900.0, 0.0),
+                enemy("miss", 300.0, 25.0),
+                enemy("beyond", 1300.0, 0.0),
+                enemy("behind", 0.0, 0.0),
+            ],
+            ..World::default()
+        };
+        let player = PlayerState {
+            id: "one".into(),
+            build: build(),
+            x: 0.0,
+            y: 0.0,
+            rotation: 0.0,
+            health: 70.0,
+            max_health: 70.0,
+        };
+        let spec = weapon_spec("railgun").unwrap();
+        spawn_projectile(
+            &mut world,
+            &player,
+            &player.build.attachments[0],
+            &spec,
+            0.0,
+        );
+        update_projectiles(&mut world, &HashMap::new());
+        assert_eq!(world.stats.hits, 2);
+        assert_eq!(
+            world.enemies.iter().map(|e| e.health).collect::<Vec<_>>(),
+            vec![58.0, 58.0, 100.0, 100.0, 100.0]
+        );
+        update_projectiles(&mut world, &HashMap::new());
+        assert_eq!(world.stats.hits, 2);
+        for _ in 0..5 {
+            update_projectiles(&mut world, &HashMap::new());
+        }
+        assert!(world.projectiles.is_empty());
     }
     #[test]
     fn magnets_pull_only_within_reach_and_stack() {
