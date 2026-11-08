@@ -18,7 +18,8 @@ export function TestYard() {
   useEffect(() => {
     if (!host.current) return;
     const scene=new TestScene(build,state=>connectionRef.current?.sendState(state));sceneRef.current=scene;
-    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current, width: host.current.clientWidth, height: host.current.clientHeight, backgroundColor: '#fff8e8', physics: { default: 'arcade', arcade: { debug: false } }, scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH }, fps:{target:60}, scene, render: { antialias: true, powerPreference:'high-performance' } });
+    // A single sampler avoids clipped sprite triangles on affected WebGL drivers.
+    const game = new Phaser.Game({ type: Phaser.AUTO, parent: host.current, width: host.current.clientWidth, height: host.current.clientHeight, backgroundColor: '#fff8e8', physics: { default: 'arcade', arcade: { debug: false } }, scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH }, fps:{target:60}, scene, render: { antialias: true, maxTextures:1, powerPreference:'high-performance' } });
     const handleVisibility=()=>document.hidden?game.loop.sleep():game.loop.wake();
     document.addEventListener('visibilitychange',handleVisibility);
     return () => { document.removeEventListener('visibilitychange',handleVisibility);connectionRef.current?.disconnect(false);connectionRef.current=null;sceneRef.current=null;game.destroy(true); };

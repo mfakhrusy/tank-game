@@ -1,3 +1,4 @@
+import { Burn, igniteBurn, tickBurn } from './burning';
 import { freshProgression, upgradedStats, xpForShape, levelProgress, Progression } from './progression';
 import Phaser from 'phaser';
 import { coreArt } from './moduleArt';
@@ -27,6 +28,9 @@ export class TestScene extends Phaser.Scene {
   private healthBars=new Map<Phaser.GameObjects.Image,Phaser.GameObjects.Graphics>();
   private knockbacks=new Map<Block,{x:number;y:number}>();
   private appliedProgression:Progression|null=null;
+  private burns=new Map<Block,Burn>();
+  private fireVisualCount=0;
+  private lastFireVisual=new WeakMap<Phaser.GameObjects.Image,number>();
   private stats;
   private collisionOutline;
   private tank!: Phaser.Physics.Arcade.Image;
@@ -116,11 +120,11 @@ export class TestScene extends Phaser.Scene {
     this.updateNetworkEntities();
     if(this.multiplayerActive){this.resolveNetworkContacts();this.machine.setPosition(this.tank.x,this.tank.y);}
     if(this.reportMultiplayerState&&(time-this.lastMultiplayerReport>=67||firing!==this.lastReportedFiring)){this.lastMultiplayerReport=time;this.lastReportedFiring=firing;this.reportMultiplayerState({x:this.tank.x,y:this.tank.y,rotation:aim,firing});}
-    if(!this.multiplayerActive){this.updateChunks();this.refreshEnemySpawns(time);this.updateKnockbacks(delta);this.updateEnemies(time,delta);this.updateEnemyAttacks(time);this.updateMagnet(delta);this.updateShapeCollisions(time);this.tryAutoRepair(time);}
+    if(!this.multiplayerActive){this.updateChunks();this.refreshEnemySpawns(time);this.updateKnockbacks(delta);this.updateEnemies(time,delta);this.updateEnemyAttacks(time);this.updateBurns(time);this.updateMagnet(delta);this.updateShapeCollisions(time);this.tryAutoRepair(time);}
     if(time-this.lastPositionReport>250){this.lastPositionReport=time;useGameStore.getState().recordPosition(this.tank.x,this.tank.y);}
     if(!this.multiplayerActive){for (const child of this.bullets.getChildren()) { const bullet=child as Bullet; if(bullet.active)this.updateBullet(bullet,time); }if (firing) for (const weapon of this.stats.weapons) this.pendingShots+=this.tryFire(time,aim,weapon);if(time-this.lastMetricFlush>=100)this.flushCombatMetrics(time);}
     if(!this.multiplayerActive)for(const group of [this.blocks,this.staticBlocks])for(const child of group.getChildren()){
-      const block=child as Block;this.updateShapeHealthBar(block,block.hp,block.maxHp,block.size);
+      const block=child as Block;this.renderBurning(block,this.burns.has(block),time);this.updateShapeHealthBar(block,block.hp,block.maxHp,block.size);
     }
     if(time-this.lastFpsReport>=1000){this.lastFpsReport=time;this.tunePerformance(this.game.loop.actualFps);}
   }
@@ -156,7 +160,7 @@ export class TestScene extends Phaser.Scene {
   private tryFire(time:number,aim:number,weapon:WeaponSpec) {
     if(time-(this.lastShots.get(weapon.uid)??0)<1000/weapon.fireRate)return 0;
     this.lastShots.set(weapon.uid,time);
-    const mountAngle=weapon.mount*Math.PI/4, base=aim+mountAngle, radius=LAYER_RADII[weapon.layer]+(weapon.behavior==='railgun'?48*LAYER_SCALES[weapon.layer]:30);
+    const mountAngle=weapon.mount*Math.PI/4, base=aim+mountAngle, radius=LAYER_RADII[weapon.layer]+((weapon.behavior==='railgun'||weapon.behavior==='flamethrower')?48*LAYER_SCALES[weapon.layer]:30);
     if(weapon.behavior==='railgun'){
       const x=this.tank.x+Math.cos(base)*radius,y=this.tank.y+Math.sin(base)*radius;
       this.showRailBeam(x,y,base,weapon.projectileSpeed);
@@ -172,7 +176,7 @@ export class TestScene extends Phaser.Scene {
     }
     let fired=0;
     for(let i=0;i<weapon.burst;i++){
-      const offset=(i-(weapon.burst-1)/2)*weapon.spread,shotAngle=base+offset;
+      const offset=(i-(weapon.burst-1)/2)*weapon.spread,shotAngle=base+offset+(weapon.behavior==='flamethrower'?(Math.random()-.5)*.18:0);
       const bullet=this.spawnProjectile(this.tank.x+Math.cos(base)*radius,this.tank.y+Math.sin(base)*radius,shotAngle,weapon.projectileSpeed,weapon.damage,weapon.projectileSize,weapon.color,weapon.behavior,time);
       if(bullet)fired+=1;
     }
@@ -186,16 +190,24 @@ export class TestScene extends Phaser.Scene {
 
   private spawnProjectile(x:number,y:number,angle:number,speed:number,damage:number,size:number,color:number,behavior:ShooterBehavior,time:number){
     if(this.bullets.getLength()>=this.projectileBudget)return null;
-    const texture=behavior==='boomerang'?'bullet-boomerang':behavior==='ricochet'?'bullet-square':'bullet';
+    const texture=behavior==='flamethrower'?'fire-puff':behavior==='boomerang'?'bullet-boomerang':behavior==='ricochet'?'bullet-square':'bullet';
     const bullet=this.bullets.create(x,y,texture) as Bullet|null;
     if(!bullet)return null;
     bullet.setActive(true).setVisible(true).setDepth(4).setScale(size/10).setTint(color).setVelocity(Math.cos(angle)*speed,Math.sin(angle)*speed);
-    bullet.damage=damage;bullet.born=time;bullet.behavior=behavior;bullet.baseAngle=angle;bullet.baseSpeed=speed;bullet.phase=Math.random()*Math.PI*2;bullet.splitDone=false;bullet.pierceLeft=behavior==='bonker'?2:1;bullet.hitBlocks=new Set();
+    bullet.damage=damage;bullet.born=time;bullet.behavior=behavior;bullet.baseAngle=angle;bullet.baseSpeed=speed;bullet.phase=Math.random()*Math.PI*2;bullet.splitDone=false;bullet.pierceLeft=behavior==='flamethrower'?99:behavior==='bonker'?2:1;bullet.hitBlocks=new Set();
+    if(behavior==='flamethrower'){bullet.clearTint().setFrame('0').setRotation(angle).setDisplaySize(44,16).setBlendMode(Phaser.BlendModes.NORMAL);(bullet.body as Phaser.Physics.Arcade.Body).setSize(14/bullet.scaleX,14/bullet.scaleY,true);}
     return bullet;
   }
 
   private updateBullet(bullet:Bullet,time:number){
     const age=time-bullet.born;
+    if(bullet.behavior==='flamethrower'){
+      const progress=Math.min(1,age/800),speed=bullet.baseSpeed*(1-.5*progress);
+      bullet.setVelocity(Math.cos(bullet.baseAngle)*speed,Math.sin(bullet.baseAngle)*speed);
+      bullet.setFrame('0').setRotation(bullet.baseAngle+Math.sin(age*.025+bullet.phase)*.1).setDisplaySize(44+progress*46,16+progress*30).setAlpha(Math.max(0,Math.pow(1-progress,.7)*.9));
+      const body=bullet.body as Phaser.Physics.Arcade.Body;const diameter=2*(7+progress*14);body.setSize(diameter/bullet.scaleX,diameter/bullet.scaleY,true);
+      if(age>=800)bullet.destroy();return;
+    }
     if(bullet.behavior==='boomerang'&&shouldBoomerangReturn(age)){
       const angle=Phaser.Math.Angle.Between(bullet.x,bullet.y,this.tank.x,this.tank.y);bullet.setVelocity(Math.cos(angle)*bullet.baseSpeed*1.15,Math.sin(angle)*bullet.baseSpeed*1.15).setRotation(angle);
       if(Phaser.Math.Distance.Between(bullet.x,bullet.y,this.tank.x,this.tank.y)<38){bullet.destroy();return;}
@@ -213,7 +225,8 @@ export class TestScene extends Phaser.Scene {
   private hitBlock(bulletObject:Phaser.Types.Physics.Arcade.GameObjectWithBody,blockObject:Phaser.Types.Physics.Arcade.GameObjectWithBody){
     const bullet=bulletObject as Bullet,block=blockObject as Block;if(!bullet.active||!block.active||bullet.hitBlocks.has(block.name))return;
     const variant=ENEMY_VARIANTS.find(item=>item.id===block.variantId)!;
-    if(!tankBlockContact([circleOutline(bullet.displayWidth/2)],bullet.x,bullet.y,0,blockOutline(variant.shape,variant.size),block.x,block.y,block.rotation))return;
+    if(!tankBlockContact([circleOutline(bullet.behavior==='flamethrower'?7+Math.min(1,(this.time.now-bullet.born)/800)*14:bullet.displayWidth/2)],bullet.x,bullet.y,0,blockOutline(variant.shape,variant.size),block.x,block.y,block.rotation))return;
+    if(bullet.behavior==='flamethrower')this.burns.set(block,igniteBurn(this.burns.get(block),this.time.now,1.5*bullet.damage/1.25));
     bullet.hitBlocks.add(block.name);block.hp-=bullet.damage;this.pendingHits+=1;block.setTint(0xffffff);this.time.delayedCall(70,()=>block.active&&block.clearTint());this.pop(block.x,block.y,block.kind===2?0xff725e:0xf6c453,4);
     if(bullet.behavior==='ricochet'){
       const dx=bullet.x-block.x,dy=bullet.y-block.y,vx=bullet.body!.velocity.x,vy=bullet.body!.velocity.y;
@@ -250,7 +263,7 @@ export class TestScene extends Phaser.Scene {
     this.lastRepairAt=time;state.repairHealth(repairAmount(state.maxHealth));this.pop(this.tank.x,this.tank.y,0x58c995,6);
   }
 
-  private destroyBlock(block:Block){if(!block.active)return;const{x,y}=block;useGameStore.getState().awardXp(xpForShape(block.kind));block.destroy();useGameStore.getState().recordBlock();this.pop(x,y,0xffb83e,12);}
+  private destroyBlock(block:Block){if(!block.active)return;const{x,y}=block;useGameStore.getState().awardXp(xpForShape(block.kind));this.burns.delete(block);block.destroy();useGameStore.getState().recordBlock();this.pop(x,y,0xffb83e,12);}
 
   private flushCombatMetrics(time:number){if(this.pendingShots||this.pendingHits)useGameStore.getState().recordCombat(this.pendingShots,this.pendingHits);this.pendingShots=0;this.pendingHits=0;this.lastMetricFlush=time;}
   private tunePerformance(fps:number){if(fps<54)this.projectileBudget=Math.max(MIN_PROJECTILE_BUDGET,this.projectileBudget-24);else if(fps>58)this.projectileBudget=Math.min(MAX_ACTIVE_PROJECTILES,this.projectileBudget+12);const parent=this.game.canvas.parentElement;if(parent){parent.dataset.fps=String(Math.round(fps));parent.dataset.projectileBudget=String(this.projectileBudget);}}
@@ -261,7 +274,7 @@ export class TestScene extends Phaser.Scene {
   private updateRemotePlayers(delta:number){const blend=1-Math.exp(-Math.min(delta,100)/65);for(const remote of this.remotePlayers.values()){remote.wrapper.x=Phaser.Math.Linear(remote.wrapper.x,remote.targetX,blend);remote.wrapper.y=Phaser.Math.Linear(remote.wrapper.y,remote.targetY,blend);remote.machine.rotation=Phaser.Math.Angle.RotateTo(remote.machine.rotation,remote.targetRotation,Math.min(delta,100)*.011);}}
   private reportRemoteCount(){const parent=this.game.canvas.parentElement;if(parent)parent.dataset.remotePlayers=String(this.remotePlayers.size);}
 
-  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;useGameStore.getState().resetProgression();this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);this.enemyShots.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
+  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;useGameStore.getState().resetProgression();this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);this.enemyShots.clear(true,true);this.burns.clear();useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
   applyNetworkWorld(snapshot:WorldSnapshot,selfId:string){this.setMultiplayerMode(true);if(!this.networkMotion.push(snapshot,performance.now()))return;const remoteIds=new Set<string>();for(const player of snapshot.players){if(player.id===selfId){
       useGameStore.getState().setProgression(player.progression??freshProgression());
       if(player.health<useGameStore.getState().health){this.machine.setAlpha(.5);this.tweens.add({targets:this.machine,alpha:1,duration:180});}
@@ -276,6 +289,7 @@ export class TestScene extends Phaser.Scene {
       }
       current.image.setPosition(position.x,position.y);
       if(enemy.charging)current.image.setTint(0xff8a6a);else current.image.clearTint();
+      this.renderBurning(current.image,enemy.burning??false,this.time.now);
       this.updateShapeHealthBar(current.image,enemy.health,enemy.maxHealth,current.image.width-12);
     }
     for(const [id,enemy] of this.networkEnemies)if(!frame.from.enemies.has(id)){enemy.image.destroy();this.networkEnemies.delete(id);}
@@ -286,12 +300,16 @@ export class TestScene extends Phaser.Scene {
       const rotation=interpolateRotation(projectile.rotation,next?.rotation??projectile.rotation,frame.alpha);
       let current=this.networkProjectiles.get(projectile.id);
       if(!current){
-        const texture=projectile.behavior==='hostile'?'enemy-shot':projectile.behavior==='railgun'?'rail-beam':projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
+        const texture=projectile.behavior==='flamethrower'?'fire-puff':projectile.behavior==='hostile'?'enemy-shot':projectile.behavior==='railgun'?'rail-beam':projectile.behavior==='boomerang'?'bullet-boomerang':projectile.behavior==='ricochet'?'bullet-square':'bullet';
         const image=this.add.image(position.x,position.y,texture).setTint(projectile.color).setScale(projectile.size/10).setDepth(4);
         if(projectile.behavior==='railgun')image.setOrigin(0,.5).setDisplaySize(projectile.length??1100,16).clearTint();
         current={image,targetX:position.x,targetY:position.y,targetRotation:rotation};this.networkProjectiles.set(projectile.id,current);
       }
       current.image.setPosition(position.x,position.y).setRotation(rotation);
+      if(projectile.behavior==='flamethrower'){
+        const age=(projectile.ageMs??0)+((next?.ageMs??projectile.ageMs??0)-(projectile.ageMs??0))*frame.alpha,progress=Math.min(1,age/800);
+        current.image.setFrame('0').setRotation(rotation+Math.sin(age*.025)*.1).clearTint().setBlendMode(Phaser.BlendModes.NORMAL).setDisplaySize(44+progress*46,16+progress*30).setAlpha(Math.pow(1-progress,.7)*.9);
+      }
       if(projectile.behavior==='railgun'){
         const age=(projectile.ageMs??0)+((next?.ageMs??projectile.ageMs??0)-(projectile.ageMs??0))*frame.alpha;
         current.image.setAlpha(Math.max(0,1-age/70));
@@ -321,7 +339,7 @@ export class TestScene extends Phaser.Scene {
 
   private clearNetworkWorld(){this.networkMotion.clear();this.clearRemotePlayers();for(const enemy of this.networkEnemies.values())enemy.image.destroy();for(const projectile of this.networkProjectiles.values())projectile.image.destroy();this.networkEnemies.clear();this.networkProjectiles.clear();const parent=this.game.canvas.parentElement;if(parent){parent.dataset.networkEnemies='0';parent.dataset.networkEnemyIds='';parent.dataset.networkProjectiles='0';delete parent.dataset.worldRevision;}}
 
-  private knockOut(){if(this.respawning)return;this.respawning=true;this.enemyShots.clear(true,true);useGameStore.getState().resetProgression();this.stats=calculateStats(this.build);this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.chunks.clear();this.currentChunk='';this.updateChunks(true);});}
+  private knockOut(){if(this.respawning)return;this.respawning=true;this.enemyShots.clear(true,true);this.burns.clear();this.burns.clear();useGameStore.getState().resetProgression();this.stats=calculateStats(this.build);this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.chunks.clear();this.currentChunk='';this.updateChunks(true);});}
 
   private drawYard(){this.add.circle(0,0,115,0xf6c453,.1).setStrokeStyle(4,0xf6c453,.3);this.add.text(0,-105,'START',{fontFamily:'Arial Black',fontSize:'22px',color:'#29324a'}).setOrigin(.5).setAlpha(.25);}
   private makeTextures(){
@@ -334,6 +352,15 @@ export class TestScene extends Phaser.Scene {
       atlas.getContext().drawImage(this.textures.get(key).getSourceImage() as HTMLCanvasElement,x,y);
       atlas.add(key,0,x,y,size,size);this.textures.remove(key);
     }});atlas.refresh();
+    for(const smoke of [false,true]){
+      const texture=this.textures.createCanvas(smoke?'fire-smoke':'fire-puff',96,64)!,context=texture.getContext();
+      for(let frame=0;frame<1;frame++){context.save();context.translate(frame*96,0);
+      const gradient=context.createRadialGradient(38+frame*4,30-frame*2,1,48,32,44);
+      if(smoke){gradient.addColorStop(0,'rgba(76,65,61,.35)');gradient.addColorStop(.5,'rgba(96,85,78,.2)');gradient.addColorStop(1,'rgba(96,85,78,0)');}
+      else {gradient.addColorStop(0,'rgba(255,255,218,1)');gradient.addColorStop(.18,'rgba(255,232,132,.95)');gradient.addColorStop(.43,'rgba(255,123,19,.95)');gradient.addColorStop(.7,'rgba(238,64,15,.55)');gradient.addColorStop(1,'rgba(190,35,9,0)');}
+      context.fillStyle=gradient;context.beginPath();context.ellipse(48,32,46,30-frame*2,0,0,Math.PI*2);context.fill();context.restore();if(!smoke)texture.add(String(frame),0,frame*96,0,96,64);
+      }texture.refresh();
+    }
     const hostile=this.make.graphics({x:0,y:0});hostile.fillStyle(0x29324a).fillCircle(10,10,9).fillStyle(0xff725e).fillCircle(10,10,6).fillStyle(0xfff0ba).fillCircle(10,10,3).generateTexture('enemy-shot',20,20);hostile.destroy();
     const rail=this.make.graphics({x:0,y:0});rail.fillStyle(0x39d9df,.18).fillRect(0,0,64,16).fillStyle(0x39d9df,.7).fillRect(0,5,64,6).fillStyle(0xeaffff).fillRect(0,7,64,2).generateTexture('rail-beam',64,16);rail.destroy();
     const bit=this.make.graphics({x:0,y:0});bit.fillStyle(0xffffff).fillCircle(4,4,4).generateTexture('bit',8,8);bit.destroy();
@@ -372,6 +399,24 @@ export class TestScene extends Phaser.Scene {
     graphic.generateTexture(`enemy-${id}-${kind}`,textureSize,textureSize);graphic.destroy();
   }
   private updateChunks(force=false){const center=chunkAt(this.tank.x,this.tank.y),zoom=useGameStore.getState().cameraZoom,radiusX=Math.max(1,Math.ceil(this.scale.width/(2*zoom*CHUNK_SIZE))),radiusY=Math.max(1,Math.ceil(this.scale.height/(2*zoom*CHUNK_SIZE))),windowKey=`${center.key}:${radiusX},${radiusY}`;if(!force&&windowKey===this.currentChunk)return;this.currentChunk=windowKey;for(const chunk of rectangularChunkWindow(center.x,center.y,radiusX,radiusY)){if(!this.chunks.has(chunk.key))this.generateChunk(chunk.x,chunk.y,chunk.key);}for(const[key,blocks]of this.chunks){const chunk=key.split(',').map(Number);if(Math.abs(chunk[0]-center.x)>radiusX||Math.abs(chunk[1]-center.y)>radiusY){blocks.forEach(block=>block.active&&block.destroy());this.chunks.delete(key);}}}
+  private updateBurns(time:number){
+    for(const [block,burn] of this.burns){
+      if(!block.active){this.burns.delete(block);continue;}
+      const result=tickBurn(burn,time);block.hp-=result.damage;
+      if(result.burn)this.burns.set(block,result.burn);else this.burns.delete(block);
+      if(block.hp<=0)this.destroyBlock(block);
+    }
+  }
+  private renderBurning(image:Phaser.GameObjects.Image,burning:boolean,time:number){
+    if(!burning||this.fireVisualCount>=64||time-(this.lastFireVisual.get(image)??0)<110||!this.cameras.main.worldView.contains(image.x,image.y))return;
+    this.lastFireVisual.set(image,time);this.fireVisualCount++;
+    const smoke=Math.random()<.2,spread=Math.min(30,image.width*.28),x=image.x+(Math.random()-.5)*spread*2,y=image.y+image.height*.12;
+    const flame=this.add.image(x,y,smoke?'fire-smoke':'fire-puff').setFrame(smoke?'__BASE':'0').setDepth(smoke?5:7).setAngle(-90+(Math.random()-.5)*25).setDisplaySize(smoke?24:32,smoke?20:18).setAlpha(smoke?.5:.9);
+    if(!smoke)flame.setBlendMode(Phaser.BlendModes.NORMAL);
+    this.tweens.add({targets:flame,x:x+(Math.random()-.5)*18,y:y-25-Math.random()*28,scaleX:flame.scaleX*(smoke?2:1.5),scaleY:flame.scaleY*(smoke?2:.45),alpha:0,angle:flame.angle+20,duration:smoke?850:450,onComplete:()=>{flame.destroy();this.fireVisualCount--;}});
+    if(!smoke&&Math.random()<.25){const ember=this.add.image(x,y,'bit').setTint(0xffbd53).setScale(.2).setDepth(7);this.tweens.add({targets:ember,x:x+(Math.random()-.5)*30,y:y-45,alpha:0,duration:400,onComplete:()=>ember.destroy()});}
+  }
+
   private updateEnemyAttacks(time:number){
     for(const object of this.enemyShots.getChildren()){
       const shot=object as Bullet;if(time-shot.born>3200)shot.destroy();

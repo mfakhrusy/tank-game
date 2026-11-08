@@ -453,3 +453,45 @@ test('levelled spawns add tougher armed enemies while retaining weak targets and
   expect(result.late.some(b=>b.kind===0)).toBe(true);
   for(const id of ['prism','sentinel','bastion'])expect(result.late.some(b=>b.variant===id)).toBe(true);
 });
+
+test('flamethrower burns targets after firing stops and the burn expires',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create;
+      TestScene.prototype.create=function(){create.call(this);window.__flameScene=this;};
+    `});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Flamethrower/}).click();
+  await page.getByRole('button',{name:'Socket 1, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.waitForFunction(()=>!!(window as any).__flameScene);
+  await page.evaluate(()=>{
+    const scene=(window as any).__flameScene;
+    for(const group of [scene.blocks,scene.staticBlocks])for(const b of [...group.getChildren()])b.destroy();
+    scene.tank.body.reset(0,0);scene.input.activePointer.positionToCamera=()=>({x:1000,y:0});
+    const target=scene.createBlock(230,0,2,1);target.hp=target.maxHp=200;(window as any).__burnTarget=target;
+    const far=scene.createBlock(550,0,2,1);far.hp=far.maxHp=200;(window as any).__farTarget=far;
+  });
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__flameScene.burns.size)).toBe(1);
+  await page.waitForTimeout(300);await page.screenshot({path:'/tmp/tank-flamethrower.png'});
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await page.waitForTimeout(650);
+  const hp=await page.evaluate(()=>(window as any).__burnTarget.hp);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__burnTarget.hp)).toBeLessThan(hp);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__flameScene.burns.size),{timeout:4000}).toBe(0);
+  const final=await page.evaluate(()=>(window as any).__burnTarget.hp);
+  await page.waitForTimeout(400);expect(await page.evaluate(()=>(window as any).__burnTarget.hp)).toBe(final);
+  expect(await page.evaluate(()=>(window as any).__farTarget.hp)).toBe(200);
+});
+
+test('sixteen flamethrowers keep a playable frame rate',async({page})=>{
+  await page.addInitScript(()=>localStorage.setItem('snap-tank-build-v2',JSON.stringify({version:2,state:{build:{version:2,name:'Fire test',color:'#5b7cfa',attachments:Array.from({length:16},(_,i)=>({uid:`flame-${i}`,partId:'flamethrower',mount:Math.floor(i/2),layer:i%2}))}}})));
+  await page.goto('/');await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await page.getByRole('button',{name:/Auto spin/}).click();
+  await page.waitForTimeout(3000);
+  await expect.poll(async()=>Number(await page.locator('.game-canvas').getAttribute('data-fps'))).toBeGreaterThanOrEqual(50);
+});

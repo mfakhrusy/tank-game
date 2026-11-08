@@ -27,7 +27,10 @@ export function moduleArt(part:Part):VectorArt[] {
     const heavy=part.id==='bonker',h=heavy?34:26;
     art.push(rect(-10,-h/2,58,h,INK,7),rect(-6,-h/2+4,50,h-8,color,4));
     art.push(line([-1,-h/2+6,18,-h/2+6],LIGHT,2,.55),rect(21,-h/2+2,7,h-4,DARK,2));
-    if(part.id==='railgun'){
+    if(part.id==='flamethrower'){
+      art.push(rect(-6,-10,23,20,DARK,4),rect(-3,-8,17,16,'#d65b32',3),line([-1,-5,11,-5], '#ffc96b',2),rect(16,-7,27,14,METAL,3),rect(32,-12,16,24,INK,3),rect(35,-8,10,16,'#ff982f',2),rect(39,-5,9,10,DARK,2),circle(43,0,3,'#ffe7a1'));
+      for(const x of [20,26])art.push(line([x,-5,x,5],INK,2));
+    }else if(part.id==='railgun'){
       art.push(rect(-4,-8,48,16,DARK,3),rect(4,-3,42,6,'#b9ffff',2),rect(2,-13,44,6,METAL,2),rect(2,7,44,6,METAL,2),rect(39,-12,9,24,INK,2),rect(42,-8,4,16,color,1));
       for(const x of [5,15,25])art.push(rect(x,-12,4,4,color,1),rect(x,8,4,4,color,1));
     }else if(part.id==='ricochet'){

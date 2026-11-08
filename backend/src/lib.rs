@@ -116,6 +116,7 @@ pub struct EnemyState {
     pub health: f32,
     pub max_health: f32,
     pub charging: bool,
+    pub burning: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -236,8 +237,39 @@ struct Projectile {
     pierce: i8,
     hit: HashSet<String>,
 }
+#[derive(Clone)]
+struct Burn {
+    until: u64,
+    next_tick: u64,
+    damage: f32,
+}
+fn ignite_burn(current: Option<&Burn>, now: u64, damage: f32) -> Burn {
+    let active = current.filter(|b| b.until >= now);
+    Burn {
+        until: now + 3000,
+        next_tick: active.map_or(now + 250, |b| b.next_tick),
+        damage: damage.max(active.map_or(0.0, |b| b.damage)),
+    }
+}
+fn update_burns(world: &mut World) {
+    for enemy in &mut world.enemies {
+        if enemy.health <= 0.0 {
+            continue;
+        }
+        if let Some(burn) = world.burns.get_mut(&enemy.id) {
+            while burn.next_tick <= world.elapsed.min(burn.until) {
+                enemy.health -= burn.damage;
+                burn.next_tick += 250;
+            }
+        }
+    }
+    world.burns.retain(|id, burn| {
+        burn.until > world.elapsed && world.enemies.iter().any(|e| e.id == *id && e.health > 0.0)
+    });
+}
 #[derive(Default)]
 struct World {
+    burns: HashMap<String, Burn>,
     enemy_attacks: HashMap<String, (u64, u64)>,
     enemies: Vec<Enemy>,
     projectiles: Vec<Projectile>,
@@ -674,6 +706,7 @@ async fn tick_world(room: &Room) {
     }
     collide_enemies(&mut world, &previous_positions);
     update_projectiles(&mut world, &mut players);
+    update_burns(&mut world);
     update_enemy_attacks(&mut world, &players);
     let mut destroyed = 0u64;
     let mut earned_xp = 0u64;
@@ -835,6 +868,16 @@ fn update_projectiles(world: &mut World, players: &mut HashMap<String, Connected
             }
             projectile.age = projectile.lifetime;
         }
+        if projectile.behavior == "flamethrower" {
+            if projectile.age >= 800 {
+                continue;
+            }
+            let progress = projectile.age as f32 / 800.0;
+            let speed = projectile.base_speed * (1.0 - 0.5 * progress);
+            projectile.vx = projectile.base_angle.cos() * speed;
+            projectile.vy = projectile.base_angle.sin() * speed;
+            projectile.size = 7.0 + progress * 14.0;
+        }
         projectile.x += projectile.vx * TICK_MS as f32 / 1000.0;
         projectile.y += projectile.vy * TICK_MS as f32 / 1000.0;
         for enemy in &mut world.enemies {
@@ -843,6 +886,19 @@ fn update_projectiles(world: &mut World, players: &mut HashMap<String, Connected
                     > projectile.size + enemy.size * 0.5
             {
                 continue;
+            }
+            if projectile.behavior == "flamethrower" {
+                let outline =
+                    ellipse_outline(projectile.x, projectile.y, projectile.size, projectile.size);
+                if !tank_enemy_contact(&[outline], enemy) {
+                    continue;
+                }
+                let burn = ignite_burn(
+                    world.burns.get(&enemy.id),
+                    world.elapsed,
+                    1.5 * projectile.damage / 1.25,
+                );
+                world.burns.insert(enemy.id.clone(), burn);
             }
             projectile.hit.insert(enemy.id.clone());
             enemy.health -= projectile.damage;
@@ -898,6 +954,17 @@ struct WeaponSpec {
 }
 fn weapon_spec(id: &str) -> Option<WeaponSpec> {
     Some(match id {
+        "flamethrower" => WeaponSpec {
+            behavior: "flamethrower",
+            damage: 1.25,
+            fire_rate: 16.0,
+            speed: 500.0,
+            size: 7.0,
+            spread: 0.0,
+            burst: 1,
+            color: 0xff982f,
+            lifetime: 800,
+        },
         "railgun" => WeaponSpec {
             behavior: "railgun",
             damage: 42.0,
@@ -997,8 +1064,15 @@ fn spawn_projectile(
     offset: f32,
 ) {
     let mount_angle = attachment.mount as f32 * std::f32::consts::FRAC_PI_4;
-    let angle = player.rotation + mount_angle + offset;
-    let radius = if spec.behavior == "railgun" {
+    let angle = player.rotation
+        + mount_angle
+        + offset
+        + if spec.behavior == "flamethrower" {
+            rand::rng().random_range(-0.09..0.09)
+        } else {
+            0.0
+        };
+    let radius = if spec.behavior == "railgun" || spec.behavior == "flamethrower" {
         if attachment.layer == 0 { 110.0 } else { 146.24 }
     } else if attachment.layer == 0 {
         112.0
@@ -1024,7 +1098,13 @@ fn spawn_projectile(
         base_speed: spec.speed,
         phase: world.next_id as f32 * 0.73,
         split: false,
-        pierce: if spec.behavior == "bonker" { 2 } else { 1 },
+        pierce: if spec.behavior == "flamethrower" {
+            99
+        } else if spec.behavior == "bonker" {
+            2
+        } else {
+            1
+        },
         hit: HashSet::new(),
     });
 }
@@ -1230,6 +1310,7 @@ async fn world_snapshot(room: &Room) -> ServerMessage {
                 y: e.y,
                 health: e.health,
                 max_health: e.max_health,
+                burning: world.burns.contains_key(&e.id),
                 charging: world
                     .enemy_attacks
                     .get(&e.id)
@@ -1249,7 +1330,7 @@ async fn world_snapshot(room: &Room) -> ServerMessage {
                 size: p.size,
                 color: p.color,
                 length: (p.behavior == "railgun").then_some(p.base_speed),
-                age_ms: (p.behavior == "railgun").then_some(p.age),
+                age_ms: (p.behavior == "railgun" || p.behavior == "flamethrower").then_some(p.age),
             })
             .collect(),
         stats: world.stats.clone(),
@@ -1511,7 +1592,7 @@ fn tank_outline(build: &TankBuild, x: f32, y: f32, rotation: f32) -> Vec<Vec<Poi
     }
     for a in &build.attachments {
         let shape = match a.part_id.as_str() {
-            "popper" | "bonker" | "ricochet" | "railgun" => box_outline(
+            "popper" | "bonker" | "ricochet" | "railgun" | "flamethrower" => box_outline(
                 19.0,
                 0.0,
                 58.0,
@@ -1992,6 +2073,59 @@ mod tests {
         assert!(enemy_weapon("bubble").is_none());
         assert_eq!(enemy_weapon("sentinel").unwrap().1, 2);
         assert_eq!(enemy_weapon("bastion").unwrap().1, 3);
+    }
+    #[test]
+    fn flame_ignites_once_and_burn_damage_lingers_then_expires_without_stacking() {
+        let mut burn = ignite_burn(None, 0, 2.0);
+        for i in 1..=20 {
+            burn = ignite_burn(Some(&burn), i * 10, 1.0);
+        }
+        assert_eq!(burn.next_tick, 250);
+        assert_eq!(burn.damage, 2.0);
+        assert_eq!(ignite_burn(Some(&burn), 220, 3.2).damage, 3.2);
+        assert_eq!(ignite_burn(Some(&burn), 5000, 1.0).damage, 1.0);
+        let mut world = World::default();
+        spawn_enemy(&mut world, 0.0, 0.0, 1);
+        let enemy = &mut world.enemies[0];
+        enemy.variant = "chunk".into();
+        enemy.x = 230.0;
+        enemy.y = 0.0;
+        enemy.size = 58.0;
+        enemy.health = 200.0;
+        enemy.max_health = 200.0;
+        let id = enemy.id.clone();
+        let player = PlayerState {
+            id: "one".into(),
+            build: build(),
+            x: 0.0,
+            y: 0.0,
+            rotation: 0.0,
+            health: 70.0,
+            max_health: 70.0,
+            progression: Progression::default(),
+        };
+        spawn_projectile(
+            &mut world,
+            &player,
+            &player.build.attachments[0],
+            &weapon_spec("flamethrower").unwrap(),
+            0.0,
+        );
+        for _ in 0..26 {
+            world.elapsed += TICK_MS;
+            update_projectiles(&mut world, &mut HashMap::new());
+            update_burns(&mut world);
+        }
+        assert_eq!(world.stats.hits, 1);
+        assert!(world.burns.contains_key(&id));
+        assert!(world.projectiles.is_empty());
+        world.elapsed = 10000;
+        update_burns(&mut world);
+        assert!((world.enemies[0].health - 180.75).abs() < 0.001);
+        assert!(world.burns.is_empty());
+        let hp = world.enemies[0].health;
+        update_burns(&mut world);
+        assert_eq!(world.enemies[0].health, hp);
     }
     #[test]
     fn magnets_pull_only_within_reach_and_stack() {

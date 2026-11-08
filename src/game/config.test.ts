@@ -30,8 +30,8 @@ describe('freeform contraption configuration', () => {
 
   it('gives every shooter an explicit working behavior contract', () => {
     const shooters=PARTS.filter(part=>part.kind==='shooter');
-    expect(shooters).toHaveLength(8);
-    expect(new Set(shooters.map(part=>part.behavior)).size).toBe(8);
+    expect(shooters).toHaveLength(9);
+    expect(new Set(shooters.map(part=>part.behavior)).size).toBe(9);
     shooters.forEach(part=>expect(part.behavior).toBeTruthy());
   });
 

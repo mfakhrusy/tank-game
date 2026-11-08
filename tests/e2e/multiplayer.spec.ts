@@ -152,3 +152,31 @@ test('creating a room at capacity shows a helpful error and allows retry',async(
   await expect(create).toBeEnabled();
   await expect(page.getByLabel('Room code')).toBeEnabled();
 });
+
+test('multiplayer flame streams ignite enemies and render their replicated burning state',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create,render=TestScene.prototype.syncNetworkEnemies;
+      TestScene.prototype.create=function(){create.call(this);window.__networkFlameScene=this;};
+      TestScene.prototype.syncNetworkEnemies=function(frame){render.call(this,frame);if([...frame.from.enemies.values()].some(e=>e.burning))window.__burningSeen=true;};
+    `});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Flamethrower/}).click();
+  await page.getByRole('button',{name:'Socket 1, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:'Create a room',exact:true}).click();
+  await expect(page.getByText('1 player connected')).toBeVisible();
+  await page.waitForFunction(()=>[...(window as any).__networkFlameScene.networkEnemies.values()].some((e:any)=>String(e.image.frame.name).includes('chunk')));
+  await page.evaluate(()=>{
+    const scene=(window as any).__networkFlameScene;
+    const enemy=[...scene.networkEnemies.values()].find((e:any)=>String(e.image.frame.name).includes('chunk')) as any;
+    scene.tank.body.reset(enemy.image.x-210,enemy.image.y);
+    scene.input.activePointer.positionToCamera=()=>({x:enemy.image.x+500,y:enemy.image.y});
+  });
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__burningSeen)).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__networkFlameScene.fireVisualCount)).toBeGreaterThan(0);
+  await page.getByRole('button',{name:'Leave room',exact:true}).click();
+});
