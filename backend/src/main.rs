@@ -20,10 +20,13 @@ async fn main() {
         .await
         .expect("bind multiplayer server");
     tracing::info!(%address,"multiplayer server listening");
-    axum::serve(listener, app(AppState::default()))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .expect("server failed");
+    axum::serve(
+        listener,
+        app(AppState::default()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .expect("server failed");
 }
 
 async fn shutdown() {

@@ -86,3 +86,30 @@ npm run dev
 Vite forwards `/api/builds` to the local sharing Worker on port 8788. Multiplayer
 continues to use the Rust server on port 8787. Shared builds do not use Linode and
 survive Worker deployments independently of active multiplayer rooms.
+
+### Request and database rate limits
+
+The Cloudflare sharing Worker checks a native rate limiter before every API call
+and before every application D1 read or write. The limiter counters do not use D1.
+HTTP 429 responses include `Retry-After: 60`; saved-build backfills pause and resume
+without losing local saves.
+
+| Operation | Limit |
+| --- | --- |
+| Sharing API | 120 requests/minute per IP |
+| Publish saved builds | 30 requests/minute per IP |
+| D1 read queries | 1,200/minute across sharing traffic per Cloudflare location |
+| D1 write queries | 10/minute across sharing traffic per Cloudflare location |
+| Queries per sharing request | At most 7 |
+| Multiplayer HTTP | 120/minute per client, 600/minute server-wide |
+| Create multiplayer rooms | 10/minute per client, 30/minute server-wide |
+| WebSocket upgrades | 20/minute per client |
+| Messages on an established socket | 30/second, burst 60 |
+| Bytes on an established socket | 64 KiB/second, burst 128 KiB |
+| Stat upgrade messages | 5/second, burst 10 |
+
+Cloudflare's native rate limits are approximate and local to each Cloudflare
+location, not a strict worldwide daily spending cap. Cloudflare Free plan quotas
+still apply independently. Multiplayer uses in-memory token buckets with bounded
+storage; these reset on server restart. Forwarded client addresses are trusted only
+from a loopback reverse proxy, and client-supplied address prefixes are ignored.

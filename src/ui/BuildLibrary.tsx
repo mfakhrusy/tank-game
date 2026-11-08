@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Copy, FolderOpen, Save, Trash2 } from 'lucide-react';
 import { copyBuild, readBuildLibrary, SavedBuild, writeBuildLibrary } from '../buildLibrary';
-import { fetchSharedBuild, publishBuild } from '../buildSharing';
+import { BuildSharingRateLimit, fetchSharedBuild, publishBuild } from '../buildSharing';
 import { useGameStore } from '../store';
 
 export function BuildLibrary({onLoad}:{onLoad:()=>void}) {
@@ -9,6 +9,8 @@ export function BuildLibrary({onLoad}:{onLoad:()=>void}) {
   const [initial]=useState(()=>{try{return {builds:readBuildLibrary(),error:''};}catch{return {builds:[],error:'Cannot read saved builds. Browser storage may be unavailable or damaged.'};}});
   const [saved,setSaved]=useState<SavedBuild[]>(initial.builds),[message,setMessage]=useState(initial.error);
   const [shareErrors,setShareErrors]=useState<Record<string,string>>({});
+  const [retryAt,setRetryAt]=useState(0);
+  useEffect(()=>{if(!retryAt)return;const timer=setTimeout(()=>setRetryAt(0),Math.max(0,retryAt-Date.now()));return ()=>clearTimeout(timer);},[retryAt]);
   const savedRef=useRef(saved);savedRef.current=saved;
   const [importId,setImportId]=useState(''),[importing,setImporting]=useState(false);
   const commit=(next:SavedBuild[],success:string)=>{
@@ -18,7 +20,7 @@ export function BuildLibrary({onLoad}:{onLoad:()=>void}) {
   // save cancels its result, so an in-flight upload cannot restore stale content.
   useEffect(()=>{
     const pending=saved.find(item=>!item.shareId&&!shareErrors[`${item.id}:${item.savedAt}`]);
-    if(!pending||initial.error)return;
+    if(!pending||initial.error||retryAt)return;
     let canceled=false;
     void publishBuild(pending.build).then(shareId=>{
       if(canceled)return;
@@ -26,9 +28,9 @@ export function BuildLibrary({onLoad}:{onLoad:()=>void}) {
       if(!entry||entry.savedAt!==pending.savedAt||JSON.stringify(entry.build)!==JSON.stringify(pending.build))return;
       const next=current.map(item=>item.id===pending.id?{...item,shareId}:item);
       try{writeBuildLibrary(next);savedRef.current=next;setSaved(next);}catch{setShareErrors(errors=>({...errors,[`${pending.id}:${pending.savedAt}`]:'Could not store the share ID. Free some browser storage, then retry.'}));}
-    }).catch(error=>{if(!canceled)setShareErrors(errors=>({...errors,[`${pending.id}:${pending.savedAt}`]:error instanceof Error?error.message:'Could not assign a build ID.'}));});
+    }).catch(error=>{if(!canceled&&error instanceof BuildSharingRateLimit){setRetryAt(Date.now()+error.retryAfterMs);return;}if(!canceled)setShareErrors(errors=>({...errors,[`${pending.id}:${pending.savedAt}`]:error instanceof Error?error.message:'Could not assign a build ID.'}));});
     return ()=>{canceled=true;};
-  },[saved,shareErrors,initial.error]);
+  },[saved,shareErrors,initial.error,retryAt]);
   const snapshot=()=>({...copyBuild(build),name:build.name.trim()||'Untitled tank'});
   const copyId=async(id:string)=>{
     try{await navigator.clipboard.writeText(id);setMessage('Build ID copied. Paste it into Load a build by ID on another computer.');}
@@ -57,7 +59,7 @@ export function BuildLibrary({onLoad}:{onLoad:()=>void}) {
     {!saved.length&&<p className="library-empty">Save your first tank to start your collection.</p>}
     <ul>{saved.map(item=><li key={item.id}>
       <div className="saved-build-title"><i style={{background:item.build.color}}/><div><strong>{item.build.name}</strong><small>{item.build.attachments.length} parts · {new Date(item.savedAt).toLocaleDateString()}</small></div></div>
-      <div className="saved-build-share">{item.shareId?<><code>{item.shareId}</code><button aria-label={`Copy build ID for ${item.build.name}`} onClick={()=>{void copyId(item.shareId!);}}><Copy size={13}/> Copy ID</button></>:shareErrors[`${item.id}:${item.savedAt}`]?<><small className="share-error">{shareErrors[`${item.id}:${item.savedAt}`]}</small><button onClick={()=>setShareErrors(errors=>{const next={...errors};delete next[`${item.id}:${item.savedAt}`];return next;})}>Retry ID</button></>:<small>Getting share ID…</small>}</div>
+      <div className="saved-build-share">{item.shareId?<><code>{item.shareId}</code><button aria-label={`Copy build ID for ${item.build.name}`} onClick={()=>{void copyId(item.shareId!);}}><Copy size={13}/> Copy ID</button></>:shareErrors[`${item.id}:${item.savedAt}`]?<><small className="share-error">{shareErrors[`${item.id}:${item.savedAt}`]}</small><button onClick={()=>setShareErrors(errors=>{const next={...errors};delete next[`${item.id}:${item.savedAt}`];return next;})}>Retry ID</button></>:<small>{retryAt?'Sharing paused; retrying automatically…':'Getting share ID…'}</small>}</div>
       <div className="saved-build-actions">
         <button disabled={importing} aria-label={`Load ${item.build.name}`} onClick={()=>{loadBuild(item.build);onLoad();setMessage(`${item.build.name} loaded.`);}}>Load</button>
         <button disabled={importing} aria-label={`Update ${item.build.name}`} title="Replace this save; changed builds get a new ID and old IDs keep their original snapshots" onClick={()=>commit(saved.map(entry=>entry.id===item.id?{...entry,build:snapshot(),savedAt:Date.now(),shareId:undefined}:entry), 'Saved build updated. Getting its new share ID…')}>Update</button>

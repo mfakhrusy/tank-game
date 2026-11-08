@@ -4,17 +4,58 @@
   "main": "worker/index.ts",
   "compatibility_date": "2026-08-05",
   "workers_dev": true,
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/builds", "/api/builds/*"]
+    "run_worker_first": [
+      "/api/builds",
+      "/api/builds/*"
+    ]
   },
-  "d1_databases": [{
-    "binding": "BUILD_DB",
-    "database_name": "tank-game-builds",
-    "database_id": "cae0082e-0f46-46ae-aabb-8f1a7e71761d",
-    "migrations_dir": "migrations"
-  }]
+  "d1_databases": [
+    {
+      "binding": "BUILD_DB",
+      "database_name": "tank-game-builds",
+      "database_id": "cae0082e-0f46-46ae-aabb-8f1a7e71761d",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "API_LIMIT",
+      "namespace_id": "714298101",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "BUILD_WRITE_LIMIT",
+      "namespace_id": "714298102",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "DB_READ_LIMIT",
+      "namespace_id": "714298103",
+      "simple": {
+        "limit": 1200,
+        "period": 60
+      }
+    },
+    {
+      "name": "DB_WRITE_LIMIT",
+      "namespace_id": "714298104",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ]
 }

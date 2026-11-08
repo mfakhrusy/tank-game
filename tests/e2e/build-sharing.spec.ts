@@ -62,3 +62,15 @@ test('sharing failures preserve local builds and retry assigns an ID',async({pag
   await expect(page.getByText('Build ID not found. Check the three words and try again.',{exact:true})).toBeVisible();
   await expect(library.locator('li')).toHaveCount(1);
 });
+
+test('saved-build uploads resume automatically after a rate-limit pause',async({page})=>{
+  let calls=0;
+  await page.route('**/api/builds',route=>{
+    calls++;
+    return calls===1?route.fulfill({status:429,headers:{'Retry-After':'1'},contentType:'application/json',body:JSON.stringify({code:'rate_limited'})}):route.continue();
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Save build',exact:true}).click();
+  await expect(page.getByText('Sharing paused; retrying automatically…',{exact:true})).toBeVisible();
+  await expect(page.locator('.saved-build-share code')).toHaveCount(1,{timeout:10000});
+  expect(calls).toBeGreaterThanOrEqual(2);
+});

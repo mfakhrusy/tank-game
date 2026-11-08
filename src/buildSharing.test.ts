@@ -23,3 +23,7 @@ it('reports offline failures without pretending a saved build has a share ID',as
   vi.stubGlobal('fetch',vi.fn().mockRejectedValue(new TypeError('Network error')));
   await expect(publishBuild(DEFAULT_BUILD)).rejects.toThrow('Check your connection');
 });
+it('preserves retry timing when build sharing is rate limited',async()=>{
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('{}',{status:429,headers:{'Retry-After':'60'}})));
+  await expect(publishBuild(DEFAULT_BUILD)).rejects.toMatchObject({retryAfterMs:60000});
+});

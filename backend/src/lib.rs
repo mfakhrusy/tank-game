@@ -1,3 +1,4 @@
+mod rate_limits;
 use axum::{
     Json, Router,
     extract::{
@@ -5,11 +6,13 @@ use axum::{
         ws::{Message, WebSocket},
     },
     http::StatusCode,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
+use rate_limits::{HttpLimits, SocketLimits};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -296,6 +299,7 @@ impl Room {
 #[derive(Clone, Default)]
 pub struct AppState {
     rooms: Arc<RwLock<HashMap<String, Arc<Room>>>>,
+    limits: Arc<Mutex<HttpLimits>>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -311,10 +315,48 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/rooms", post(create_room))
         .route("/multiplayer/{room}", get(websocket_handler))
+        .layer(middleware::from_fn_with_state(state.clone(), limit_http))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
+async fn limit_http(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    use axum::extract::ConnectInfo;
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip());
+    // Only the local reverse proxy may supply a forwarded address. Take its
+    // rightmost value, so a client-supplied X-Forwarded-For cannot bypass limits.
+    let ip = peer
+        .filter(|ip| ip.is_loopback())
+        .and_then(|_| request.headers().get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit(',').next())
+        .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
+        .or(peer)
+        .map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
+    let now = std::time::Instant::now();
+    let path = request.uri().path();
+    let mut limits = state.limits.lock().await;
+    let allowed = limits.allow("all".into(), 600, now)
+        && limits.allow(format!("ip:{ip}"), 120, now)
+        && (path != "/api/rooms"
+            || request.method() != axum::http::Method::POST
+            || (limits.allow("rooms".into(), 30, now)
+                && limits.allow(format!("rooms:{ip}"), 10, now)))
+        && (!path.starts_with("/multiplayer/") || limits.allow(format!("join:{ip}"), 20, now));
+    drop(limits);
+    if !allowed {
+        return (StatusCode::TOO_MANY_REQUESTS,[("retry-after","60")],Json(serde_json::json!({"code":"rate_limited","message":"Too many requests. Please wait a minute and try again."}))).into_response();
+    }
+    next.run(request).await
+}
+
 async fn create_room(State(state): State<AppState>) -> Response {
     // Keep the capacity check and insertion atomic across concurrent requests.
     let mut rooms = state.rooms.write().await;
@@ -444,11 +486,23 @@ async fn handle_socket(socket: WebSocket, app_state: AppState, room_id: String) 
             }
         }
     });
+    let mut socket_limits = SocketLimits::new(std::time::Instant::now());
     while let Some(Ok(message)) = socket_receiver.next().await {
+        let bytes = match &message {
+            Message::Text(text) => text.len(),
+            Message::Binary(data) | Message::Ping(data) | Message::Pong(data) => data.len(),
+            Message::Close(_) => 0,
+        };
+        if !socket_limits.message(bytes, std::time::Instant::now()) {
+            break;
+        }
         match message {
             Message::Text(text) => {
                 let parsed = serde_json::from_str::<ClientMessage>(&text);
                 if let Ok(ClientMessage::Upgrade { stat }) = &parsed {
+                    if !socket_limits.upgrade(std::time::Instant::now()) {
+                        break;
+                    }
                     let mut players = room.players.lock().await;
                     if let Some(entry) = players.get_mut(&player_id) {
                         let previous_max = entry.state.max_health;
@@ -2126,6 +2180,60 @@ mod tests {
         let hp = world.enemies[0].health;
         update_burns(&mut world);
         assert_eq!(world.enemies[0].health, hp);
+    }
+    #[tokio::test]
+    async fn http_rate_limits_apply_before_room_creation_and_recover_with_new_clients() {
+        use tower::ServiceExt;
+        let state = AppState::default();
+        let router = app(state.clone());
+        for i in 0..120 {
+            let response = router
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/api/health")
+                        .extension(axum::extract::ConnectInfo(
+                            "192.0.2.1:4321".parse::<std::net::SocketAddr>().unwrap(),
+                        ))
+                        .header("x-forwarded-for", format!("203.0.113.{i}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/rooms")
+                    .extension(axum::extract::ConnectInfo(
+                        "192.0.2.1:4321".parse::<std::net::SocketAddr>().unwrap(),
+                    ))
+                    .method("POST")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["retry-after"], "60");
+        assert!(state.rooms.read().await.is_empty());
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/health")
+                    .extension(axum::extract::ConnectInfo(
+                        "192.0.2.2:4321".parse::<std::net::SocketAddr>().unwrap(),
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
     #[test]
     fn magnets_pull_only_within_reach_and_stack() {

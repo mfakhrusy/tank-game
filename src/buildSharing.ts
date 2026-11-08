@@ -1,3 +1,4 @@
+export class BuildSharingRateLimit extends Error {constructor(public retryAfterMs:number){super('Too many sharing requests. Please wait a minute and try again.');}}
 import { validBuild } from './buildValidation';
 import type { TankBuild } from './game/config';
 export const normalizeBuildId=(value:string)=>value.trim().toLowerCase().replace(/[\s-]+/g,'_');
@@ -5,6 +6,7 @@ export const isBuildId=(id:string)=>/^[a-z]{2,12}_[a-z]{2,12}_[a-z]{2,12}$/.test
 async function sharingRequest(path:string,options?:RequestInit){
   let response:Response;
   try{response=await fetch(path,{...options,signal:AbortSignal.timeout(12000)});}catch{throw new Error('Could not reach build sharing. Check your connection and try again.');}
+  if(response.status===429){const seconds=Number(response.headers.get('Retry-After')||60);throw new BuildSharingRateLimit(Math.max(1,Math.min(3600,Number.isFinite(seconds)?seconds:60))*1000);}
   const result:unknown=await response.json().catch(()=>null);
   if(!response.ok)throw new Error(result&&typeof result==='object'&&'error' in result&&typeof result.error==='string'?result.error:'Build sharing is temporarily unavailable. Please try again.');
   return result;
