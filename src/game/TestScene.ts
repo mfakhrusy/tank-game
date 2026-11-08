@@ -8,7 +8,7 @@ import { Attachment, ShooterBehavior, TankBuild, WeaponSpec, boosterThrustForDir
 import { useGameStore } from '../store';
 import { BLOCKS_PER_CHUNK, CHUNK_SIZE, WORLD_LIMIT, chunkAt, createChunkRandom, rectangularChunkWindow } from './world';
 import { canAutoRepair, repairAmount, smasherKnockback, ramImpactDamage, shapeImpactDamage } from './combat';
-import { CORE_RADIUS, LAYER_RADII, attachmentTransform, contraptionRadius, occupiedMountDepths } from './geometry';
+import { CORE_RADIUS, LAYER_RADII, LAYER_SCALES, attachmentTransform, contraptionRadius, occupiedMountDepths } from './geometry';
 import { ENEMY_VARIANTS, EnemyShape, enemyCombatStats, enemyVariant, enemyVelocity } from './enemies';
 import { LocalNetworkState, NetworkEnemy, NetworkPlayer, NetworkProjectile, WorldSnapshot } from '../multiplayer';
 
@@ -142,7 +142,7 @@ export class TestScene extends Phaser.Scene {
   private tryFire(time:number,aim:number,weapon:WeaponSpec) {
     if(time-(this.lastShots.get(weapon.uid)??0)<1000/weapon.fireRate)return 0;
     this.lastShots.set(weapon.uid,time);
-    const mountAngle=weapon.mount*Math.PI/4, base=aim+mountAngle, radius=LAYER_RADII[weapon.layer]+30;
+    const mountAngle=weapon.mount*Math.PI/4, base=aim+mountAngle, radius=LAYER_RADII[weapon.layer]+(weapon.behavior==='railgun'?48*LAYER_SCALES[weapon.layer]:30);
     if(weapon.behavior==='railgun'){
       const x=this.tank.x+Math.cos(base)*radius,y=this.tank.y+Math.sin(base)*radius;
       this.showRailBeam(x,y,base,weapon.projectileSpeed);
@@ -167,7 +167,7 @@ export class TestScene extends Phaser.Scene {
 
   private showRailBeam(x:number,y:number,angle:number,length:number){
     const beam=this.add.image(x,y,'rail-beam').setOrigin(0,.5).setRotation(angle).setDisplaySize(length,16).setDepth(4);
-    this.tweens.add({targets:beam,alpha:0,scaleY:beam.scaleY*.3,duration:180,onComplete:()=>beam.destroy()});
+    this.tweens.add({targets:beam,alpha:0,scaleY:beam.scaleY*.3,duration:70,onComplete:()=>beam.destroy()});
   }
 
   private spawnProjectile(x:number,y:number,angle:number,speed:number,damage:number,size:number,color:number,behavior:ShooterBehavior,time:number){
@@ -276,7 +276,10 @@ export class TestScene extends Phaser.Scene {
         current={image,targetX:position.x,targetY:position.y,targetRotation:rotation};this.networkProjectiles.set(projectile.id,current);
       }
       current.image.setPosition(position.x,position.y).setRotation(rotation);
-      if(projectile.behavior==='railgun')current.image.setAlpha(Math.max(0,1-(projectile.ageMs??0)/180));
+      if(projectile.behavior==='railgun'){
+        const age=(projectile.ageMs??0)+((next?.ageMs??projectile.ageMs??0)-(projectile.ageMs??0))*frame.alpha;
+        current.image.setAlpha(Math.max(0,1-age/70));
+      }
     }
     for(const [id,projectile] of this.networkProjectiles)if(!frame.from.projectiles.has(id)){projectile.image.destroy();this.networkProjectiles.delete(id);}
   }

@@ -854,7 +854,13 @@ fn spawn_projectile(
 ) {
     let mount_angle = attachment.mount as f32 * std::f32::consts::FRAC_PI_4;
     let angle = player.rotation + mount_angle + offset;
-    let radius = if attachment.layer == 0 { 112.0 } else { 166.0 };
+    let radius = if spec.behavior == "railgun" {
+        if attachment.layer == 0 { 110.0 } else { 146.24 }
+    } else if attachment.layer == 0 {
+        112.0
+    } else {
+        166.0
+    };
     world.next_id += 1;
     world.projectiles.push(Projectile {
         id: format!("p{}", world.next_id),

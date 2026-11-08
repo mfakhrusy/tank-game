@@ -324,3 +324,33 @@ test('railgun pierces aligned shapes once and leaves nearby misses untouched',as
   await page.waitForTimeout(250);
   expect(await page.evaluate(()=>(window as any).__railTargets.map((b:any)=>b.hp))).toEqual([58,58,100,100]);
 });
+
+test('auto spinning railguns fire along the barrel from the actual outer muzzle',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const show=TestScene.prototype.showRailBeam;
+      TestScene.prototype.showRailBeam=function(x,y,angle,length){
+        window.__railAngles??=[];
+        window.__railAngles.push({angle,tankAngle:this.machine.rotation,radius:Math.hypot(x-this.tank.x,y-this.tank.y),originAngle:Math.atan2(y-this.tank.y,x-this.tank.x)});
+        show.call(this,x,y,angle,length);
+      };
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Railgun/}).click();
+  await page.getByRole('button',{name:'Socket 3, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:'Socket 3, 1 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.getByRole('button',{name:/Auto spin/}).click();
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__railAngles?.length??0)).toBeGreaterThanOrEqual(4);
+  const shots=await page.evaluate(()=>(window as any).__railAngles as {angle:number;tankAngle:number;radius:number;originAngle:number}[]);
+  for(const shot of shots){
+    expect(Math.sin(shot.angle-shot.tankAngle-Math.PI/2)).toBeCloseTo(0,6);
+    expect(Math.cos(shot.angle-shot.originAngle)).toBeCloseTo(1,6);
+    expect(Math.min(Math.abs(shot.radius-110),Math.abs(shot.radius-146.24))).toBeLessThan(.001);
+  }
+  expect(Math.abs(shots[2].tankAngle-shots[0].tankAngle)).toBeGreaterThan(.5);
+});
