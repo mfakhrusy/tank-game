@@ -4,7 +4,7 @@ A kid-friendly 2D contraption builder and action yard. Build unconventional vehi
 
 ## Local development
 
-Requirements: Node.js 24+, Rust, Chromium for Playwright, and Docker.
+Requirements: Node.js 24+, Rust, and Chromium for Playwright. Docker is optional for full-stack local development.
 
 ```sh
 npm ci
@@ -44,7 +44,9 @@ PLAYWRIGHT_BASE_URL=https://example.workers.dev npx playwright test tests/e2e/de
 
 ## Deployment
 
-The repository includes two deployment paths:
+The repository includes these deployment paths:
+
+- **Native Linux production (recommended for a small VPS):** build the Rust binary with `sh scripts/build-server.sh`, then install it with `sudo sh scripts/install-server.sh`. See [the native deployment guide](deploy/README.md) for systemd, HTTPS, and building off-server.
 
 - `npm run deploy:cloudflare` deploys the built SPA to Cloudflare Workers Static Assets.
 - `docker compose up --build -d` deploys the complete client plus Rust WebSocket backend to a Docker host such as a VPS.

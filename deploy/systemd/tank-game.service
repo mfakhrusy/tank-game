@@ -1,0 +1,21 @@
+[Unit]
+Description=Tank game multiplayer server
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=true
+ExecStart=/opt/tank-game/contraption-room-server
+Environment=BIND_ADDR=127.0.0.1:8787
+Environment=RUST_LOG=contraption_room_server=info,tower_http=info
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

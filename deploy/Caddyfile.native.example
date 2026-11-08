@@ -1,0 +1,16 @@
+# Point this hostname to your VPS, and allow TCP 80/443 (UDP 443 is optional).
+# Merge this site block into your existing Caddy config if other sites are hosted.
+game.example.com {
+  encode zstd gzip
+  handle /api/* {
+    reverse_proxy 127.0.0.1:8787
+  }
+  handle /multiplayer/* {
+    reverse_proxy 127.0.0.1:8787
+  }
+  handle {
+    root * /var/www/tank-game
+    try_files {path} /index.html
+    file_server
+  }
+}
