@@ -4,9 +4,9 @@ services:
       context: ./backend
     restart: unless-stopped
     expose:
-      - "8787"
+      - '8787'
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/api/health"]
+      test: ['CMD', 'curl', '--fail', '--silent', 'http://127.0.0.1:8787/api/health']
       interval: 10s
       timeout: 3s
       retries: 3
@@ -19,4 +19,4 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "8080:80"
+      - '8080:80'

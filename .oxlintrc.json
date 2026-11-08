@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "react", "unicorn", "oxc"],
+  "categories": { "correctness": "error" },
+  "env": { "browser": true, "node": true },
+  "ignorePatterns": [
+    "backend/**",
+    "dist/**",
+    "node_modules/**",
+    ".wrangler/**",
+    "test-results/**",
+    "playwright-report/**",
+    "worker/worker-configuration.d.ts"
+  ]
+}
