@@ -23,6 +23,7 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
+pub const MAX_ROOMS: usize = 10;
 pub const MAX_PLAYERS: usize = 8;
 pub const MAX_ATTACHMENTS: usize = 16;
 const ROOM_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -231,15 +232,22 @@ pub fn app(state: AppState) -> Router {
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
-async fn create_room(State(state): State<AppState>) -> Json<RoomCreated> {
+async fn create_room(State(state): State<AppState>) -> Response {
+    // Keep the capacity check and insertion atomic across concurrent requests.
+    let mut rooms = state.rooms.write().await;
+    if rooms.len() >= MAX_ROOMS {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+            "code": "room_limit_reached",
+            "message": "The server is full (10 rooms maximum). Join an existing room or try again later."
+        }))).into_response();
+    }
     loop {
         let room_id = generate_room_id();
-        let mut rooms = state.rooms.write().await;
         if !rooms.contains_key(&room_id) {
             let room = Arc::new(Room::new());
             rooms.insert(room_id.clone(), room.clone());
             tokio::spawn(simulation_loop(room));
-            return Json(RoomCreated { room_id });
+            return Json(RoomCreated { room_id }).into_response();
         }
     }
 }
@@ -1556,6 +1564,40 @@ mod tests {
             update_projectiles(&mut world, &HashMap::new());
         }
         assert!(world.projectiles.is_empty());
+    }
+    #[tokio::test]
+    async fn room_limit_is_atomic_and_releases_capacity_when_a_room_is_removed() {
+        let state = AppState::default();
+        let responses =
+            futures_util::future::join_all((0..32).map(|_| create_room(State(state.clone()))))
+                .await;
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|r| r.status() == StatusCode::OK)
+                .count(),
+            MAX_ROOMS
+        );
+        assert_eq!(state.rooms.read().await.len(), MAX_ROOMS);
+        for response in responses
+            .into_iter()
+            .filter(|r| r.status() != StatusCode::OK)
+        {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(error["code"], "room_limit_reached");
+        }
+        let id = state.rooms.read().await.keys().next().unwrap().clone();
+        let removed = state.rooms.write().await.remove(&id).unwrap();
+        removed.closed.store(true, Ordering::Relaxed);
+        assert_eq!(
+            create_room(State(state.clone())).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(state.rooms.read().await.len(), MAX_ROOMS);
     }
     #[test]
     fn magnets_pull_only_within_reach_and_stack() {

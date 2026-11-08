@@ -141,3 +141,14 @@ test('multiplayer renders the authoritative railgun beam',async({page})=>{
   await page.getByRole('button',{name:/Auto shoot/}).click();
   await page.getByRole('button',{name:'Leave room',exact:true}).click();
 });
+
+test('creating a room at capacity shows a helpful error and allows retry',async({page})=>{
+  await page.route('**/api/rooms',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:'room_limit_reached'})}));
+  await page.goto('/');
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  const create=page.getByRole('button',{name:'Create a room',exact:true});
+  await create.click();
+  await expect(page.getByText('The server is full (10 rooms maximum). Join an existing room or try again later.',{exact:true})).toBeVisible();
+  await expect(create).toBeEnabled();
+  await expect(page.getByLabel('Room code')).toBeEnabled();
+});

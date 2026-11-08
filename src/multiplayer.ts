@@ -34,7 +34,11 @@ export function multiplayerEndpoint(path:string,origin=import.meta.env.VITE_MULT
 
 export async function createMultiplayerRoom(){
   const response=await fetch(multiplayerEndpoint('/api/rooms'),{method:'POST'});
-  if(!response.ok)throw new Error('Could not create a room. Is the multiplayer server running?');
+  if(!response.ok){
+    const error=await response.json().catch(()=>null) as {code?:string}|null;
+    if(error?.code==='room_limit_reached')throw new Error('The server is full (10 rooms maximum). Join an existing room or try again later.');
+    throw new Error('Could not create a room. Is the multiplayer server running?');
+  }
   const result=await response.json() as {roomId:string};
   return normalizeRoomCode(result.roomId);
 }

@@ -1,5 +1,5 @@
-import { describe,expect,it } from 'vitest';
-import { multiplayerEndpoint, normalizeRoomCode } from './multiplayer';
+import { afterEach,describe,expect,it,vi } from 'vitest';
+import { createMultiplayerRoom, multiplayerEndpoint, normalizeRoomCode } from './multiplayer';
 
 describe('multiplayer room codes',()=>{
   it('makes pasted codes safe and consistent',()=>{
@@ -21,5 +21,17 @@ describe('separate multiplayer origin',()=>{
   it('supports local HTTP development and ignores paths on a configured origin',()=>{
     expect(multiplayerEndpoint('/multiplayer/ABC123','http://localhost:8787/',true)).toBe('ws://localhost:8787/multiplayer/ABC123');
     expect(multiplayerEndpoint('/api/rooms','https://example.com/old/path')).toBe('https://example.com/api/rooms');
+  });
+});
+
+describe('room creation errors',()=>{
+  afterEach(()=>vi.unstubAllGlobals());
+  it('explains the room limit to players',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({code:'room_limit_reached'}),{status:503})));
+    await expect(createMultiplayerRoom()).rejects.toThrow('The server is full (10 rooms maximum). Join an existing room or try again later.');
+  });
+  it('keeps the connection error for other server failures',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('Unavailable',{status:503})));
+    await expect(createMultiplayerRoom()).rejects.toThrow('Is the multiplayer server running?');
   });
 });
