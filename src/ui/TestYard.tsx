@@ -1,3 +1,4 @@
+import { UPGRADES, MAX_UPGRADE_RANK, levelProgress, UpgradeId } from '../game/progression';
 import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { ArrowLeft, Copy, LogOut, RotateCcw, RefreshCw, Crosshair, Target, Users, ZoomIn, ZoomOut } from 'lucide-react';
@@ -10,6 +11,7 @@ import { MultiplayerConnection, RoomStats, createMultiplayerRoom, normalizeRoomC
 export function TestYard() {
   const host = useRef<HTMLDivElement>(null);
   const sceneRef=useRef<TestScene|null>(null),connectionRef=useRef<MultiplayerConnection|null>(null),remoteIdsRef=useRef(new Set<string>()),selfIdRef=useRef('');
+  const [upgradesOpen,setUpgradesOpen]=useState(false);
   const [roomInput,setRoomInput]=useState(''),[roomId,setRoomId]=useState(''),[connectionStatus,setConnectionStatus]=useState<'disconnected'|'connecting'|'connected'>('disconnected'),[peerCount,setPeerCount]=useState(0),[roomMessage,setRoomMessage]=useState('');
   const [sharedStats,setSharedStats]=useState<RoomStats>({blocks:0,shots:0,hits:0});
   const { build, metrics, position, health, maxHealth, cameraZoom, setCameraZoom, autoSpin, autoShoot, toggleAutoSpin, toggleAutoShoot, setMode, resetMetrics } = useGameStore();
@@ -24,6 +26,8 @@ export function TestYard() {
   const joinRoom=(code:string)=>{const normalized=normalizeRoomCode(code);if(normalized.length!==6){setRoomMessage('Room codes have 6 letters or numbers.');return;}connectionRef.current?.disconnect(false);sceneRef.current?.clearRemotePlayers();remoteIdsRef.current.clear();setPeerCount(0);setRoomId(normalized);setRoomMessage('');const connection=new MultiplayerConnection(normalized,build,{welcome:(id,players)=>{selfIdRef.current=id;sceneRef.current?.setMultiplayerMode(true);remoteIdsRef.current=new Set(players.map(player=>player.id));players.forEach(player=>sceneRef.current?.upsertRemotePlayer(player));setPeerCount(players.length+1);},upsert:player=>{if(player.id===selfIdRef.current)return;const isNew=!remoteIdsRef.current.has(player.id);remoteIdsRef.current.add(player.id);sceneRef.current?.upsertRemotePlayer(player);if(isNew)setPeerCount(count=>Math.max(2,count+1));},remove:id=>{const existed=remoteIdsRef.current.delete(id);sceneRef.current?.removeRemotePlayer(id);if(existed)setPeerCount(count=>Math.max(1,count-1));},world:snapshot=>{sceneRef.current?.applyNetworkWorld(snapshot,selfIdRef.current);setSharedStats(snapshot.stats);setPeerCount(snapshot.players.length);},status:(status,message)=>{setConnectionStatus(status);if(message)setRoomMessage(message);if(status==='disconnected'){sceneRef.current?.setMultiplayerMode(false);if(!message)setPeerCount(0);}}});connectionRef.current=connection;connection.connect();};
   const createRoom=async()=>{try{setConnectionStatus('connecting');setRoomMessage('Making a room…');const code=await createMultiplayerRoom();setRoomInput(code);joinRoom(code);}catch(error){setConnectionStatus('disconnected');setRoomMessage(error instanceof Error?error.message:'Could not create a room.');}};
   const leaveRoom=()=>{connectionRef.current?.disconnect();connectionRef.current=null;sceneRef.current?.setMultiplayerMode(false);remoteIdsRef.current.clear();selfIdRef.current='';setRoomId('');setPeerCount(0);setSharedStats({blocks:0,shots:0,hits:0});setRoomMessage('');};
+  const progression=useGameStore(state=>state.progression),progress=levelProgress(progression);
+  const spendUpgrade=(id:UpgradeId)=>{if(connectionStatus==='connected')connectionRef.current?.sendUpgrade(id);else useGameStore.getState().upgrade(id);};
   const activeStats=connectionStatus==='connected'?sharedStats:metrics;
   const accuracy = activeStats.shots ? Math.round(activeStats.hits / activeStats.shots * 100) : 0;
   const distance = Math.round(Math.hypot(position.x, position.y) / 10);
@@ -40,6 +44,12 @@ export function TestYard() {
       <div><strong>{accuracy}%</strong><span>Target<br />hits</span></div>
       <div><strong>{activeStats.shots}</strong><span>Shots<br />fired</span></div>
       <div><strong className="distance-value">{distance}m</strong><span>Distance<br />traveled</span></div>
+    </section>
+    <section className="progression-card" aria-label="Level progression" onWheel={event=>event.stopPropagation()}>
+      <div className="level-heading"><strong>Level {progress.level}</strong><span>{progress.required?`${progress.current} / ${progress.required} XP`:'Max level'}</span></div>
+      <progress aria-label="Experience to next level" value={progress.required?progress.current:1} max={progress.required||1}/>
+      <button className="upgrade-toggle" aria-expanded={upgradesOpen} onClick={()=>setUpgradesOpen(!upgradesOpen)}>Upgrades <strong>{progress.points} point{progress.points===1?'':'s'}</strong></button>
+      {upgradesOpen&&<div className="upgrade-list"><small>{connectionStatus==='connected'?'Shared XP · your own upgrades':'Destroy shapes to earn XP'} · resets on knockout</small>{UPGRADES.map(item=><button key={item.id} aria-label={`Upgrade ${item.name}`} disabled={progress.points<1||progression.upgrades[item.id]>=MAX_UPGRADE_RANK} onClick={()=>spendUpgrade(item.id)}><span><b>{item.name}</b><small>{item.bonus}</small></span><span className="upgrade-rank">{progression.upgrades[item.id]} / {MAX_UPGRADE_RANK} <b>+</b></span></button>)}</div>}
     </section>
     <section className="zoom-card" aria-label="Camera zoom">
       <button aria-label="Zoom out" disabled={cameraZoom<=MIN_CAMERA_ZOOM} onClick={()=>setCameraZoom(cameraZoom-.1)}><ZoomOut/></button>

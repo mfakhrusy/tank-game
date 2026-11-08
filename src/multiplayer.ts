@@ -1,3 +1,4 @@
+import type { Progression, UpgradeId } from './game/progression';
 import type { TankBuild } from './game/config';
 
 export type NetworkPlayer = {
@@ -8,6 +9,7 @@ export type NetworkPlayer = {
   rotation:number;
   health:number;
   maxHealth:number;
+  progression?:Progression;
 };
 
 export type NetworkEnemy={id:string;variant:string;level:number;x:number;y:number;health:number;maxHealth:number};
@@ -55,6 +57,10 @@ export class MultiplayerConnection {
     this.socket.addEventListener('message',event=>this.receive(String(event.data)));
     this.socket.addEventListener('error',()=>this.handlers.status('disconnected','Room not found or the server is unavailable.'));
     this.socket.addEventListener('close',()=>this.handlers.status('disconnected'));
+  }
+
+  sendUpgrade(stat:UpgradeId){
+    if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify({type:'upgrade',stat}));
   }
 
   sendState(state:LocalNetworkState){

@@ -38,9 +38,9 @@ export function smasherKnockback(ramDamage:number,speed:number,maximumSpeed:numb
   return Math.min(480,220*Math.sqrt((ramDamage-8)/28))*(.3+.7*impact);
 }
 
-export function ramImpactDamage(baseRamDamage:number,speed:number,maximumSpeed:number,targetMaxHealth:number):number {
+export function ramImpactDamage(baseRamDamage:number,speed:number,maximumSpeed:number,targetMaxHealth:number,upgradeMultiplier=1):number {
   const damage=ramDamageAtSpeed(baseRamDamage,speed,maximumSpeed);
-  return baseRamDamage>8?Math.min(damage,Math.max(1,Math.ceil(targetMaxHealth*.3))):damage;
+  return baseRamDamage>8?Math.min(damage,Math.max(1,Math.ceil(targetMaxHealth*.3*upgradeMultiplier))):damage;
 }
 
 export function shapeImpactDamage(closingSpeed:number,maximumHealth:number):number {

@@ -1,3 +1,4 @@
+import { freshProgression, upgradedStats, xpForShape, Progression } from './progression';
 import Phaser from 'phaser';
 import { coreArt } from './moduleArt';
 import { bakeArtwork, bakeModuleAtlas } from './renderArtwork';
@@ -25,6 +26,7 @@ export class TestScene extends Phaser.Scene {
   private healthBarValues=new WeakMap<Phaser.GameObjects.Image,{health:number;maximum:number;size:number}>();
   private healthBars=new Map<Phaser.GameObjects.Image,Phaser.GameObjects.Graphics>();
   private knockbacks=new Map<Block,{x:number;y:number}>();
+  private appliedProgression:Progression|null=null;
   private stats;
   private collisionOutline;
   private tank!: Phaser.Physics.Arcade.Image;
@@ -61,6 +63,7 @@ export class TestScene extends Phaser.Scene {
   constructor(private build: TankBuild,private reportMultiplayerState?:(state:LocalNetworkState)=>void) { super('TestYard'); this.stats = calculateStats(build); this.collisionOutline=tankOutline(build); }
 
   create() {
+    useGameStore.getState().resetProgression();
     this.cameras.main.setBackgroundColor('#fff8e8');
     this.physics.world.setBounds(-WORLD_LIMIT, -WORLD_LIMIT, WORLD_LIMIT * 2, WORLD_LIMIT * 2);
     this.cameras.main.setBounds(-WORLD_LIMIT, -WORLD_LIMIT, WORLD_LIMIT * 2, WORLD_LIMIT * 2);
@@ -86,6 +89,13 @@ export class TestScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number) {
+    const progression=useGameStore.getState().progression;
+    if(progression!==this.appliedProgression){
+      const oldArmor=this.stats.armor;
+      this.stats=upgradedStats(calculateStats(this.build),progression);this.appliedProgression=progression;
+      this.tank.setMaxVelocity(Math.max(90,this.stats.speed));
+      if(!this.multiplayerActive&&oldArmor!==this.stats.armor){const state=useGameStore.getState();state.setHealth(state.health+this.stats.armor-oldArmor,this.stats.armor);}
+    }
     if(this.respawning){this.machine.setPosition(this.tank.x,this.tank.y);return;}
     const targetZoom=useGameStore.getState().cameraZoom,currentZoom=this.cameras.main.zoom,nextZoom=Math.abs(targetZoom-currentZoom)<.002?targetZoom:Phaser.Math.Linear(currentZoom,targetZoom,.14);if(Math.abs(nextZoom-currentZoom)>.0001)this.cameras.main.setZoom(nextZoom);
     const world = this.input.activePointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
@@ -217,7 +227,7 @@ export class TestScene extends Phaser.Scene {
     this.tank.setPosition(this.tank.x+contact.x,this.tank.y+contact.y);
     (this.tank.body as Phaser.Physics.Arcade.Body).updateFromGameObject();
     const now=this.time.now,last=this.contactCooldowns.get(block.name)??-Infinity;if(now-last<520)return;this.contactCooldowns.set(block.name,now);
-    const speed=this.tank.body!.velocity.length(),ram=ramImpactDamage(this.stats.ramDamage,speed,Math.max(1,this.stats.speed),block.maxHp);
+    const speed=this.tank.body!.velocity.length(),ram=ramImpactDamage(this.stats.ramDamage,speed,Math.max(1,this.stats.speed),block.maxHp,1+.12*useGameStore.getState().progression.upgrades.ram);
     useGameStore.getState().damageHealth(block.contactDamage);this.lastDamageAt=now;block.hp-=ram;
     this.machine.setAlpha(.35);this.tweens.add({targets:this.machine,alpha:1,duration:180});this.pop(this.tank.x,this.tank.y,0xff725e,7);this.pop(block.x,block.y,0xf6c453,Math.min(10,3+Math.round(ram/10)));
     this.tank.setVelocity(-this.tank.body!.velocity.x*.38,-this.tank.body!.velocity.y*.38);
@@ -236,7 +246,7 @@ export class TestScene extends Phaser.Scene {
     this.lastRepairAt=time;state.repairHealth(repairAmount(state.maxHealth));this.pop(this.tank.x,this.tank.y,0x58c995,6);
   }
 
-  private destroyBlock(block:Block){if(!block.active)return;const{x,y}=block;block.destroy();useGameStore.getState().recordBlock();this.pop(x,y,0xffb83e,12);}
+  private destroyBlock(block:Block){if(!block.active)return;const{x,y}=block;useGameStore.getState().awardXp(xpForShape(block.kind));block.destroy();useGameStore.getState().recordBlock();this.pop(x,y,0xffb83e,12);}
 
   private flushCombatMetrics(time:number){if(this.pendingShots||this.pendingHits)useGameStore.getState().recordCombat(this.pendingShots,this.pendingHits);this.pendingShots=0;this.pendingHits=0;this.lastMetricFlush=time;}
   private tunePerformance(fps:number){if(fps<54)this.projectileBudget=Math.max(MIN_PROJECTILE_BUDGET,this.projectileBudget-24);else if(fps>58)this.projectileBudget=Math.min(MAX_ACTIVE_PROJECTILES,this.projectileBudget+12);const parent=this.game.canvas.parentElement;if(parent){parent.dataset.fps=String(Math.round(fps));parent.dataset.projectileBudget=String(this.projectileBudget);}}
@@ -247,8 +257,9 @@ export class TestScene extends Phaser.Scene {
   private updateRemotePlayers(delta:number){const blend=1-Math.exp(-Math.min(delta,100)/65);for(const remote of this.remotePlayers.values()){remote.wrapper.x=Phaser.Math.Linear(remote.wrapper.x,remote.targetX,blend);remote.wrapper.y=Phaser.Math.Linear(remote.wrapper.y,remote.targetY,blend);remote.machine.rotation=Phaser.Math.Angle.RotateTo(remote.machine.rotation,remote.targetRotation,Math.min(delta,100)*.011);}}
   private reportRemoteCount(){const parent=this.game.canvas.parentElement;if(parent)parent.dataset.remotePlayers=String(this.remotePlayers.size);}
 
-  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
+  setMultiplayerMode(active:boolean){if(this.multiplayerActive===active)return;this.multiplayerActive=active;useGameStore.getState().resetProgression();this.networkMotion.clear();if(active){this.knockbacks.clear();for(const blocks of this.chunks.values())blocks.forEach(block=>block.active&&block.destroy());this.chunks.clear();this.currentChunk='';this.blocks.clear(true,true);this.staticBlocks.clear(true,true);this.bullets.clear(true,true);useGameStore.getState().resetMetrics();}else{this.clearNetworkWorld();useGameStore.getState().resetHealth(this.stats.armor);this.updateChunks(true);}}
   applyNetworkWorld(snapshot:WorldSnapshot,selfId:string){this.setMultiplayerMode(true);if(!this.networkMotion.push(snapshot,performance.now()))return;const remoteIds=new Set<string>();for(const player of snapshot.players){if(player.id===selfId){
+      useGameStore.getState().setProgression(player.progression??freshProgression());
       if(player.health<useGameStore.getState().health){this.machine.setAlpha(.5);this.tweens.add({targets:this.machine,alpha:1,duration:180});}
       useGameStore.getState().setHealth(player.health,player.maxHealth);continue;}remoteIds.add(player.id);this.upsertRemotePlayer(player);}for(const id of [...this.remotePlayers.keys()])if(!remoteIds.has(id))this.removeRemotePlayer(id);const parent=this.game.canvas.parentElement;if(parent){parent.dataset.worldRevision=String(snapshot.revision);parent.dataset.networkEnemies=String(snapshot.enemies.length);parent.dataset.networkEnemyIds=snapshot.enemies.map(enemy=>enemy.id).sort().join(',');parent.dataset.networkProjectiles=String(snapshot.projectiles.length);}}
   private syncNetworkEnemies(frame:RenderFrames){
@@ -305,7 +316,7 @@ export class TestScene extends Phaser.Scene {
 
   private clearNetworkWorld(){this.networkMotion.clear();this.clearRemotePlayers();for(const enemy of this.networkEnemies.values())enemy.image.destroy();for(const projectile of this.networkProjectiles.values())projectile.image.destroy();this.networkEnemies.clear();this.networkProjectiles.clear();const parent=this.game.canvas.parentElement;if(parent){parent.dataset.networkEnemies='0';parent.dataset.networkEnemyIds='';parent.dataset.networkProjectiles='0';delete parent.dataset.worldRevision;}}
 
-  private knockOut(){if(this.respawning)return;this.respawning=true;this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.currentChunk='';this.updateChunks(true);});}
+  private knockOut(){if(this.respawning)return;this.respawning=true;useGameStore.getState().resetProgression();this.stats=calculateStats(this.build);this.tank.setAcceleration(0).setVelocity(0);this.machine.setAlpha(.25);this.time.delayedCall(900,()=>{this.tank.setPosition(0,0).setVelocity(0);this.machine.setPosition(0,0).setAlpha(1);useGameStore.getState().resetHealth(this.stats.armor);this.respawning=false;this.currentChunk='';this.updateChunks(true);});}
 
   private drawYard(){this.add.circle(0,0,115,0xf6c453,.1).setStrokeStyle(4,0xf6c453,.3);this.add.text(0,-105,'START',{fontFamily:'Arial Black',fontSize:'22px',color:'#29324a'}).setOrigin(.5).setAlpha(.25);}
   private makeTextures(){

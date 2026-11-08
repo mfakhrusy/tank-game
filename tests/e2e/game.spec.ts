@@ -354,3 +354,44 @@ test('auto spinning railguns fire along the barrel from the actual outer muzzle'
   }
   expect(Math.abs(shots[2].tankAngle-shots[0].tankAngle)).toBeGreaterThan(.5);
 });
+
+test('destroying shapes earns levels, hull upgrades apply, and each run starts fresh',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create;
+      TestScene.prototype.create=function(){create.call(this);window.__progressScene=this;};
+    `});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  await page.getByRole('button',{name:/Railgun/}).click();
+  await page.getByRole('button',{name:'Socket 1, 0 of 2 layers'}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await expect(page.getByText('Level 1',{exact:true})).toBeVisible();
+  await page.waitForFunction(()=>!!(window as any).__progressScene);
+  await page.evaluate(()=>{
+    const scene=(window as any).__progressScene;
+    for(const group of [scene.blocks,scene.staticBlocks])for(const b of [...group.getChildren()])b.destroy();
+    scene.tank.body.reset(0,0);
+    scene.input.activePointer.positionToCamera=()=>({x:1000,y:0});
+    for(const x of [300,500,700])scene.createBlock(x,0,0,1).hp=1;
+  });
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await expect(page.getByText('Level 2',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:/Auto shoot/}).click();
+  await page.getByRole('button',{name:/Upgrades/}).click();
+  await page.getByRole('button',{name:'Upgrade Hull strength',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Health 81 of 81'})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Upgrade Shot power',exact:true})).toBeDisabled();
+  await page.screenshot({path:'/tmp/tank-progression-desktop.png'});
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.getByRole('button',{name:'Upgrade Hull strength',exact:true})).toBeVisible();
+  await page.screenshot({path:'/tmp/tank-progression-mobile.png'});
+  await page.evaluate(()=>(window as any).__progressScene.knockOut());
+  await expect(page.getByText('Level 1',{exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'Health 70 of 70'})).toBeVisible();
+  await page.getByRole('button',{name:'Workshop',exact:true}).click();
+  await page.getByRole('button',{name:/Test this thing/}).click();
+  await expect(page.getByText('Level 1',{exact:true})).toBeVisible();
+});

@@ -48,6 +48,50 @@ pub struct TankBuild {
     pub color: String,
     pub attachments: Vec<Attachment>,
 }
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Upgrades {
+    damage: u8,
+    reload: u8,
+    speed: u8,
+    health: u8,
+    ram: u8,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Progression {
+    xp: u64,
+    upgrades: Upgrades,
+}
+impl Progression {
+    fn level(&self) -> u8 {
+        let (mut level, mut remaining) = (1, self.xp);
+        while level < 26 && remaining >= 30 + 15 * (level as u64 - 1) {
+            remaining -= 30 + 15 * (level as u64 - 1);
+            level += 1;
+        }
+        level
+    }
+    fn spend(&mut self, stat: &str) -> bool {
+        let u = &self.upgrades;
+        let spent = u.damage + u.reload + u.speed + u.health + u.ram;
+        if spent >= self.level() - 1 {
+            return false;
+        }
+        let rank = match stat {
+            "damage" => &mut self.upgrades.damage,
+            "reload" => &mut self.upgrades.reload,
+            "speed" => &mut self.upgrades.speed,
+            "health" => &mut self.upgrades.health,
+            "ram" => &mut self.upgrades.ram,
+            _ => return false,
+        };
+        if *rank >= 5 {
+            return false;
+        }
+        *rank += 1;
+        true
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
@@ -58,6 +102,8 @@ pub struct PlayerState {
     pub rotation: f32,
     pub health: f32,
     pub max_health: f32,
+    #[serde(default)]
+    pub progression: Progression,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +143,9 @@ pub struct RoomStats {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
+    Upgrade {
+        stat: String,
+    },
     Join {
         build: TankBuild,
     },
@@ -307,6 +356,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState, room_id: String) 
         rotation: 0.0,
         health: max_health,
         max_health,
+        progression: Progression::default(),
     };
     let (outbound, mut outbound_rx) = mpsc::channel::<Message>(20);
     let existing = {
@@ -363,12 +413,28 @@ async fn handle_socket(socket: WebSocket, app_state: AppState, room_id: String) 
     while let Some(Ok(message)) = socket_receiver.next().await {
         match message {
             Message::Text(text) => {
+                let parsed = serde_json::from_str::<ClientMessage>(&text);
+                if let Ok(ClientMessage::Upgrade { stat }) = &parsed {
+                    let mut players = room.players.lock().await;
+                    if let Some(entry) = players.get_mut(&player_id) {
+                        let previous_max = entry.state.max_health;
+                        if entry.state.progression.spend(stat) {
+                            entry.state.max_health = (build_armor(&entry.state.build)
+                                * (1.0 + 0.15 * entry.state.progression.upgrades.health as f32))
+                                .round();
+                            entry.state.health = (entry.state.health + entry.state.max_health
+                                - previous_max)
+                                .min(entry.state.max_health);
+                        }
+                    }
+                    continue;
+                }
                 let Ok(ClientMessage::State {
                     x,
                     y,
                     rotation,
                     firing,
-                }) = serde_json::from_str::<ClientMessage>(&text)
+                }) = parsed
                 else {
                     continue;
                 };
@@ -569,9 +635,11 @@ async fn tick_world(room: &Room) {
         }
         if player.firing {
             for attachment in player.state.build.attachments.clone() {
-                let Some(spec) = weapon_spec(&attachment.part_id) else {
+                let Some(mut spec) = weapon_spec(&attachment.part_id) else {
                     continue;
                 };
+                spec.damage *= 1.0 + 0.12 * player.state.progression.upgrades.damage as f32;
+                spec.fire_rate *= 1.0 + 0.08 * player.state.progression.upgrades.reload as f32;
                 let cooldown = (1000.0 / spec.fire_rate) as u64;
                 if now.saturating_sub(*player.last_fire.get(&attachment.uid).unwrap_or(&0))
                     < cooldown
@@ -590,15 +658,20 @@ async fn tick_world(room: &Room) {
     collide_enemies(&mut world, &previous_positions);
     update_projectiles(&mut world, &players);
     let mut destroyed = 0u64;
+    let mut earned_xp = 0u64;
     world.enemies.retain(|enemy| {
         if enemy.health <= 0.0 {
             destroyed += 1;
+            earned_xp += [12, 24, 40][enemy.level.min(2) as usize];
             false
         } else {
             true
         }
     });
     world.stats.blocks += destroyed;
+    for player in players.values_mut() {
+        player.state.progression.xp = player.state.progression.xp.saturating_add(earned_xp);
+    }
     let World {
         enemies, contacts, ..
     } = &mut *world;
@@ -627,15 +700,21 @@ async fn tick_world(room: &Room) {
             contacts.insert(key, now);
             player.state.health = (player.state.health - enemy.contact_damage).max(0.0);
             player.last_damage = now;
-            let ram = build_ram_damage(&player.state.build);
+            let ram = build_ram_damage(&player.state.build)
+                * (1.0 + 0.12 * player.state.progression.upgrades.ram as f32);
             enemy.health -= if ram > 8.0 {
-                ram.min((enemy.max_health * 0.3).ceil().max(1.0))
+                ram.min(
+                    (enemy.max_health
+                        * 0.3
+                        * (1.0 + 0.12 * player.state.progression.upgrades.ram as f32))
+                        .ceil()
+                        .max(1.0),
+                )
             } else {
                 ram
             };
             if enemy.health > 0.0 {
-                let strength =
-                    smasher_knockback(build_ram_damage(&player.state.build), player.impact_speed);
+                let strength = smasher_knockback(ram, player.impact_speed);
                 let dx = enemy.x - player.state.x;
                 let dy = enemy.y - player.state.y;
                 let distance = dx.hypot(dy);
@@ -647,6 +726,8 @@ async fn tick_world(room: &Room) {
             if player.state.health <= 0.0 {
                 player.state.x = 0.0;
                 player.state.y = 0.0;
+                player.state.progression = Progression::default();
+                player.state.max_health = build_armor(&player.state.build);
                 player.state.health = player.state.max_health;
             }
         }
@@ -1543,6 +1624,7 @@ mod tests {
             rotation: 0.0,
             health: 70.0,
             max_health: 70.0,
+            progression: Progression::default(),
         };
         let spec = weapon_spec("railgun").unwrap();
         spawn_projectile(
@@ -1600,6 +1682,31 @@ mod tests {
         assert_eq!(state.rooms.read().await.len(), MAX_ROOMS);
     }
     #[test]
+    fn progression_curve_caps_levels_and_validates_spending() {
+        let mut p = Progression::default();
+        assert_eq!(p.level(), 1);
+        assert!(!p.spend("damage"));
+        p.xp = 30;
+        assert_eq!(p.level(), 2);
+        assert!(p.spend("health"));
+        assert!(!p.spend("damage"));
+        p.xp = 135;
+        assert_eq!(p.level(), 4);
+        assert!(!p.spend("unknown"));
+        p.xp = 100000;
+        assert_eq!(p.level(), 26);
+        for _ in 0..5 {
+            assert!(p.spend("damage"));
+        }
+        assert!(!p.spend("damage"));
+        for stat in ["reload", "speed", "health", "ram"] {
+            for _ in 0..5 {
+                p.spend(stat);
+            }
+        }
+        assert!(!p.spend("health"));
+    }
+    #[test]
     fn magnets_pull_only_within_reach_and_stack() {
         assert_eq!(magnet_pull_distance(0.0, 200.0, 42.0, 33.0), 0.0);
         assert_eq!(magnet_pull_distance(60.0, 300.0, 42.0, 33.0), 0.0);
@@ -1643,6 +1750,7 @@ mod tests {
             rotation: 0.0,
             health: 70.0,
             max_health: 70.0,
+            progression: Progression::default(),
         };
         room.players.lock().await.insert(
             "one".into(),
@@ -1677,6 +1785,7 @@ mod tests {
             rotation: 0.0,
             health: 70.0,
             max_health: 70.0,
+            progression: Progression::default(),
         };
         room.players.lock().await.insert(
             "one".into(),
@@ -1684,6 +1793,22 @@ mod tests {
                 state,
                 sender: tx,
                 firing: true,
+                last_fire: HashMap::new(),
+                last_damage: 0,
+                impact_speed: 0.0,
+                last_state_received: std::time::Instant::now(),
+            },
+        );
+        let mut teammate = room.players.lock().await["one"].state.clone();
+        teammate.id = "two".into();
+        teammate.y = 500.0;
+        let (tx, _) = mpsc::channel(4);
+        room.players.lock().await.insert(
+            "two".into(),
+            ConnectedPlayer {
+                state: teammate,
+                sender: tx,
+                firing: false,
                 last_fire: HashMap::new(),
                 last_damage: 0,
                 impact_speed: 0.0,
@@ -1715,6 +1840,13 @@ mod tests {
         assert!(!world.enemies.iter().any(|enemy| enemy.id == "target"));
         assert!(world.stats.blocks >= 1);
         assert!(world.stats.hits >= 1);
+        drop(world);
+        let players = room.players.lock().await;
+        assert!(players["one"].state.progression.xp >= 12);
+        assert_eq!(
+            players["one"].state.progression.xp,
+            players["two"].state.progression.xp
+        );
     }
     #[tokio::test]
     async fn smasher_impacts_push_stationary_enemies_and_decay() {
@@ -1730,6 +1862,7 @@ mod tests {
             rotation: 0.0,
             health: 70.0,
             max_health: 70.0,
+            progression: Progression::default(),
         };
         room.players.lock().await.insert(
             "one".into(),
@@ -1898,10 +2031,10 @@ mod tests {
     async fn two_real_clients_receive_the_same_authoritative_world() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let app_state = AppState::default();
+        let server_state = app_state.clone();
         let server = tokio::spawn(async move {
-            axum::serve(listener, app(AppState::default()))
-                .await
-                .unwrap();
+            axum::serve(listener, app(server_state)).await.unwrap();
         });
         let mut http = tokio::net::TcpStream::connect(address).await.unwrap();
         http.write_all(format!("POST /api/rooms HTTP/1.1\r\nHost: {address}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
@@ -1922,7 +2055,8 @@ mod tests {
             .send(ClientWsMessage::Text(join.clone().into()))
             .await
             .unwrap();
-        next_type(&mut first, "welcome").await;
+        let welcome = next_type(&mut first, "welcome").await;
+        let first_id = welcome["player_id"].as_str().unwrap().to_owned();
         second
             .send(ClientWsMessage::Text(join.into()))
             .await
@@ -1965,6 +2099,44 @@ mod tests {
         .await
         .unwrap();
         assert!(fired["stats"]["shots"].as_u64().unwrap() > 0);
+        let active_room = app_state.rooms.read().await.get(&room).unwrap().clone();
+        active_room
+            .players
+            .lock()
+            .await
+            .get_mut(&first_id)
+            .unwrap()
+            .state
+            .progression
+            .xp = 30;
+        for stat in ["health", "damage", "unknown"] {
+            first
+                .send(ClientWsMessage::Text(
+                    serde_json::json!({"type":"upgrade","stat":stat})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = next_type(&mut second, "world_snapshot").await;
+                let player = snapshot["players"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|p| p["id"] == first_id)
+                    .unwrap();
+                if player["progression"]["upgrades"]["health"] == 1 {
+                    assert_eq!(player["progression"]["upgrades"]["damage"], 0);
+                    assert_eq!(player["maxHealth"], 81.0);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
         first.close(None).await.unwrap();
         second.close(None).await.unwrap();
         server.abort();

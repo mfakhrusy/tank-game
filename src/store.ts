@@ -1,3 +1,4 @@
+import { Progression, UpgradeId, freshProgression, buyUpgrade } from './game/progression';
 import { create } from 'zustand';
 import { copyBuild } from './buildLibrary';
 import { persist } from 'zustand/middleware';
@@ -7,6 +8,11 @@ import { normalizeCameraZoom } from './game/world';
 
 type Metrics = { blocks: number; shots: number; hits: number };
 type GameStore = {
+  progression:Progression;
+  resetProgression:()=>void;
+  awardXp:(amount:number)=>void;
+  upgrade:(id:UpgradeId)=>void;
+  setProgression:(progression:Progression)=>void;
   build: TankBuild;
   loadBuild: (build:TankBuild) => void;
   mode: 'workshop' | 'yard';
@@ -39,6 +45,11 @@ type GameStore = {
 };
 
 export const useGameStore = create<GameStore>()(persist((set, get) => ({
+  progression:freshProgression(),
+  resetProgression:()=>set({progression:freshProgression()}),
+  awardXp:(amount)=>set(state=>({progression:{...state.progression,xp:state.progression.xp+Math.max(0,amount)}})),
+  upgrade:(id)=>set(state=>({progression:buyUpgrade(state.progression,id)})),
+  setProgression:(progression)=>set(state=>JSON.stringify(state.progression)===JSON.stringify(progression)?{}:{progression}),
   build: DEFAULT_BUILD,
   loadBuild: (build) => set({build:copyBuild(build)}),
   mode: 'workshop',
