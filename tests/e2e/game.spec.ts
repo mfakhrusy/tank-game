@@ -495,3 +495,28 @@ test('sixteen flamethrowers keep a playable frame rate',async({page})=>{
   await page.waitForTimeout(3000);
   await expect.poll(async()=>Number(await page.locator('.game-canvas').getAttribute('data-fps'))).toBeGreaterThanOrEqual(50);
 });
+
+test('fast movement keeps the tank artwork synchronized and centered in the camera',async({page})=>{
+  await page.route('**/src/game/TestScene.ts*',async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:await response.text()+`
+      const create=TestScene.prototype.create;
+      TestScene.prototype.create=function(){create.call(this);window.__fastScene=this;};
+    `});
+  });
+  await page.goto('/');await page.getByRole('button',{name:/Test this thing/}).click();
+  await page.waitForFunction(()=>!!(window as any).__fastScene);
+  await page.evaluate(()=>{
+    const scene=(window as any).__fastScene;
+    scene.tank.body.reset(5000,5000);scene.tank.setMaxVelocity(2000);
+    scene.stats.speed=2000;scene.stats.acceleration=4000;
+    (window as any).__movementErrors=[];
+    scene.events.on('postupdate',()=>{
+      if(scene.tank.body.velocity.length()>600)(window as any).__movementErrors.push(Math.hypot(scene.machine.x-scene.tank.x,scene.machine.y-scene.tank.y));
+    });
+  });
+  await page.keyboard.down('d');await page.waitForTimeout(1200);await page.keyboard.up('d');
+  const errors=await page.evaluate(()=>(window as any).__movementErrors as number[]);
+  expect(errors.length).toBeGreaterThan(10);expect(Math.max(...errors)).toBeLessThan(.01);
+  expect(await page.evaluate(()=>(window as any).__fastScene.cameras.main.lerp.x)).toBe(1);
+});

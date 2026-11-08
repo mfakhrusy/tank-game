@@ -81,7 +81,10 @@ export class TestScene extends Phaser.Scene {
     const collisionRadius=contraptionRadius(this.build)+24;
     this.tank = this.physics.add.image(0, 0, 'machine-body').setCircle(collisionRadius, 150-collisionRadius, 150-collisionRadius).setDrag(700).setMaxVelocity(Math.max(90, this.stats.speed)).setAlpha(.001);
     this.machine = this.makeMachine(this.build,true).setPosition(0, 0).setDepth(6);
-    this.cameras.main.startFollow(this.tank, true, .08, .08);
+    this.cameras.main.startFollow(this.tank, true, 1, 1);
+    // Arcade writes its final position in POST_UPDATE, after Scene.update.
+    // Sync the visible tank afterwards so the camera and artwork use the same frame.
+    this.events.on(Phaser.Scenes.Events.POST_UPDATE,()=>this.machine.setPosition(this.tank.x,this.tank.y));
     this.cameras.main.setZoom(useGameStore.getState().cameraZoom);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Record<string, Phaser.Input.Keyboard.Key>;
     useGameStore.getState().resetHealth(this.stats.armor);
