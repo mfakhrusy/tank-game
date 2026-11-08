@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
-import { ArrowLeft, Copy, LogOut, RotateCcw, Target, Users, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, Copy, LogOut, RotateCcw, RefreshCw, Crosshair, Target, Users, ZoomIn, ZoomOut } from 'lucide-react';
 import { TestScene } from '../game/TestScene';
 import { MAX_CAMERA_ZOOM, MIN_CAMERA_ZOOM } from '../game/world';
 import { useGameStore } from '../store';
@@ -12,7 +12,7 @@ export function TestYard() {
   const sceneRef=useRef<TestScene|null>(null),connectionRef=useRef<MultiplayerConnection|null>(null),remoteIdsRef=useRef(new Set<string>()),selfIdRef=useRef('');
   const [roomInput,setRoomInput]=useState(''),[roomId,setRoomId]=useState(''),[connectionStatus,setConnectionStatus]=useState<'disconnected'|'connecting'|'connected'>('disconnected'),[peerCount,setPeerCount]=useState(0),[roomMessage,setRoomMessage]=useState('');
   const [sharedStats,setSharedStats]=useState<RoomStats>({blocks:0,shots:0,hits:0});
-  const { build, metrics, position, health, maxHealth, cameraZoom, setCameraZoom, setMode, resetMetrics } = useGameStore();
+  const { build, metrics, position, health, maxHealth, cameraZoom, setCameraZoom, autoSpin, autoShoot, toggleAutoSpin, toggleAutoShoot, setMode, resetMetrics } = useGameStore();
   useEffect(() => {
     if (!host.current) return;
     const scene=new TestScene(build,state=>connectionRef.current?.sendState(state));sceneRef.current=scene;
@@ -45,6 +45,10 @@ export function TestYard() {
       <button aria-label="Zoom out" disabled={cameraZoom<=MIN_CAMERA_ZOOM} onClick={()=>setCameraZoom(cameraZoom-.1)}><ZoomOut/></button>
       <output aria-live="polite">{Math.round(cameraZoom*100)}%</output>
       <button aria-label="Zoom in" disabled={cameraZoom>=MAX_CAMERA_ZOOM} onClick={()=>setCameraZoom(cameraZoom+.1)}><ZoomIn/></button>
+    </section>
+    <section className="auto-controls" aria-label="Automatic controls">
+      <button type="button" aria-pressed={autoSpin} onClick={toggleAutoSpin}><RefreshCw/><span>Auto spin</span><strong>{autoSpin?'On':'Off'}</strong></button>
+      <button type="button" aria-pressed={autoShoot} onClick={toggleAutoShoot}><Crosshair/><span>Auto shoot</span><strong>{autoShoot?'On':'Off'}</strong></button>
     </section>
     <section className="multiplayer-card" aria-label="Multiplayer room">
       <div className="multiplayer-title"><Users/><strong>Play together</strong></div>

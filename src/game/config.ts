@@ -85,7 +85,7 @@ export const PARTS: Part[] = [
   { id: 'bumper', kind: 'shell', name: 'Bumper', kidLabel: 'Bouncy edge', description: 'A cheap little protective bumper.', icon: '◡', cost: 1, color: 0xf6c453, shape: 'plate', stats: { armor: 20 } },
   { id: 'spike', kind: 'shell', name: 'Spike Crown', kidLabel: 'Crash damage', description: 'Sharp points that make ramming blocks much stronger.', icon: '✹', cost: 3, color: 0xff725e, shape: 'spike', stats: { armor: 18, ramDamage: 28 } },
   { id: 'drill', kind: 'gadget', name: 'Crash Drill', kidLabel: 'Maximum ramming', description: 'A spinning-looking nose built to smash strong blocks.', icon: '▶', cost: 4, color: 0x936ee8, shape: 'spike', stats: { ramDamage: 45 } },
-  { id: 'magnet', kind: 'gadget', name: 'Block Magnet', kidLabel: 'Pulls prizes', description: 'A curious orb with future powers.', icon: 'U', cost: 2, color: 0x47b8e8, shape: 'orb', stats: { magnet: 60 } },
+  { id: 'magnet', kind: 'gadget', name: 'Block Magnet', kidLabel: 'Pulls nearby blocks', description: 'Gathers nearby blocks with room to spare. Drive into them when you are ready to ram.', icon: 'U', cost: 2, color: 0x47b8e8, shape: 'orb', stats: { magnet: 60 } },
   { id: 'lamp', kind: 'gadget', name: 'Happy Lamp', kidLabel: 'Just for fun', description: 'Glows because every build needs flair.', icon: '✦', cost: 1, color: 0xf6c453, shape: 'orb', stats: {} },
 ];
 

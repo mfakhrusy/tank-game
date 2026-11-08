@@ -34,15 +34,28 @@ export function enemyCombatStats(levelIndex: number, variant: EnemyVariant) {
   };
 }
 
+// Smooth seeded noise changes course without per-frame randomness or sharp turns.
+function wanderNoise(step:number,seed:number):number {
+  const hash=(index:number)=>{const value=Math.sin(index*127.1+seed*311.7)*43758.5453;return (value-Math.floor(value))*2-1;};
+  const index=Math.floor(step),fraction=step-index,blend=fraction*fraction*(3-2*fraction);
+  return hash(index)+(hash(index+1)-hash(index))*blend;
+}
+
 export function enemyVelocity(time: number, variant: Pick<EnemyVariant,'moveSpeed'|'roamRadius'>, phase: number, x: number, y: number, homeX: number, homeY: number) {
   if (!variant.moveSpeed) return { x:0, y:0 };
+  const dart=variant.moveSpeed>110,kite=variant.moveSpeed>80&&!dart;
+  const seed=phase+1,seconds=time/1000;
+  const pace=dart ? .85 : kite ? 1.4 : 2.3;
+  const clock=seconds/(pace*(.85+.3*(Math.sin(seed*9)*.5+.5)))+seed*3;
+  const heading=phase+wanderNoise(clock,seed)*Math.PI*1.7+wanderNoise(clock*.37,seed+8)*Math.PI;
+  const pulse=(wanderNoise(clock*.8,seed+17)+1)/2;
+  const speedScale=dart ? .12+1.5*Math.pow(pulse,3) : kite ? .55+.65*pulse : .18+.82*pulse;
   const dx=homeX-x,dy=homeY-y,distance=Math.hypot(dx,dy);
-  const wanderAngle=phase+Math.sin(time*.00065+phase)*.85+Math.sin(time*.00021+phase*2.3)*.35;
-  const wanderX=Math.cos(wanderAngle),wanderY=Math.sin(wanderAngle);
+  const wanderX=Math.cos(heading),wanderY=Math.sin(heading);
   const homeXDirection=distance>.001?dx/distance:wanderX,homeYDirection=distance>.001?dy/distance:wanderY;
-  const returnStart=variant.roamRadius*.55,returnRange=Math.max(1,variant.roamRadius-returnStart);
-  const homeWeight=Math.max(0,Math.min(1,(distance-returnStart)/returnRange));
+  const homeWeight=Math.max(0,Math.min(1,(distance-variant.roamRadius*.55)/Math.max(1,variant.roamRadius*.45)));
   const blendedX=wanderX+(homeXDirection-wanderX)*homeWeight,blendedY=wanderY+(homeYDirection-wanderY)*homeWeight;
   const length=Math.max(.001,Math.hypot(blendedX,blendedY));
-  return { x:blendedX/length*variant.moveSpeed, y:blendedY/length*variant.moveSpeed };
+  const speed=variant.moveSpeed*(speedScale+(1-speedScale)*homeWeight);
+  return { x:blendedX/length*speed, y:blendedY/length*speed };
 }

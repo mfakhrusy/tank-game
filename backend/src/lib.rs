@@ -139,6 +139,8 @@ struct ConnectedPlayer {
     firing: bool,
     last_fire: HashMap<String, u64>,
     last_damage: u64,
+    impact_speed: f32,
+    last_state_received: std::time::Instant,
 }
 struct Enemy {
     id: String,
@@ -155,6 +157,8 @@ struct Enemy {
     roam: f32,
     phase: f32,
     contact_damage: f32,
+    knock_x: f32,
+    knock_y: f32,
 }
 struct Projectile {
     id: String,
@@ -315,6 +319,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState, room_id: String) 
                 firing: false,
                 last_fire: HashMap::new(),
                 last_damage: 0,
+                impact_speed: 0.0,
+                last_state_received: std::time::Instant::now(),
             },
         );
         existing
@@ -362,6 +368,10 @@ async fn handle_socket(socket: WebSocket, app_state: AppState, room_id: String) 
                     let Some(entry) = players.get_mut(&player_id) else {
                         break;
                     };
+                    entry.impact_speed = (distance(entry.state.x, entry.state.y, x, y)
+                        / entry.last_state_received.elapsed().as_secs_f32().max(0.016))
+                    .min(1000.0);
+                    entry.last_state_received = std::time::Instant::now();
                     entry.state.x = x.clamp(-MAX_WORLD_POSITION, MAX_WORLD_POSITION);
                     entry.state.y = y.clamp(-MAX_WORLD_POSITION, MAX_WORLD_POSITION);
                     entry.state.rotation = normalize_angle(rotation);
@@ -446,16 +456,48 @@ async fn tick_world(room: &Room) {
     while world.enemies.len() < ENEMY_TARGET {
         spawn_enemy(&mut world, center_x, center_y);
     }
+    let previous_positions: HashMap<String, (f32, f32)> = world
+        .enemies
+        .iter()
+        .map(|e| (e.id.clone(), (e.x, e.y)))
+        .collect();
     for enemy in &mut world.enemies {
+        let decay = (-5.0 * TICK_MS as f32 / 1000.0).exp();
+        let push_x = enemy.knock_x * (1.0 - decay) / 5.0;
+        let push_y = enemy.knock_y * (1.0 - decay) / 5.0;
+        enemy.x += push_x;
+        enemy.y += push_y;
+        enemy.home_x += push_x;
+        enemy.home_y += push_y;
+        enemy.knock_x *= decay;
+        enemy.knock_y *= decay;
         if enemy.speed <= 0.0 {
             continue;
         }
         let dx = enemy.home_x - enemy.x;
         let dy = enemy.home_y - enemy.y;
         let distance = (dx * dx + dy * dy).sqrt();
+        let seed = enemy.phase + 1.0;
+        let pace = if enemy.speed > 110.0 {
+            0.85
+        } else if enemy.speed > 80.0 {
+            1.4
+        } else {
+            2.3
+        };
+        let clock = now as f32 / 1000.0 / (pace * (0.85 + 0.3 * ((seed * 9.0).sin() * 0.5 + 0.5)))
+            + seed * 3.0;
         let wander = enemy.phase
-            + (now as f32 * 0.00065 + enemy.phase).sin() * 0.85
-            + (now as f32 * 0.00021 + enemy.phase * 2.3).sin() * 0.35;
+            + wander_noise(clock, seed) * std::f32::consts::PI * 1.7
+            + wander_noise(clock * 0.37, seed + 8.0) * std::f32::consts::PI;
+        let pulse = (wander_noise(clock * 0.8, seed + 17.0) + 1.0) / 2.0;
+        let speed_scale = if enemy.speed > 110.0 {
+            0.12 + 1.5 * pulse.powi(3)
+        } else if enemy.speed > 80.0 {
+            0.55 + 0.65 * pulse
+        } else {
+            0.18 + 0.82 * pulse
+        };
         let wx = wander.cos();
         let wy = wander.sin();
         let weight =
@@ -468,8 +510,43 @@ async fn tick_world(room: &Room) {
         let bx = wx + (hx - wx) * weight;
         let by = wy + (hy - wy) * weight;
         let len = (bx * bx + by * by).sqrt().max(0.001);
-        enemy.x += bx / len * enemy.speed * TICK_MS as f32 / 1000.0;
-        enemy.y += by / len * enemy.speed * TICK_MS as f32 / 1000.0;
+        let speed = enemy.speed * (speed_scale + (1.0 - speed_scale) * weight);
+        enemy.x += bx / len * speed * TICK_MS as f32 / 1000.0;
+        enemy.y += by / len * speed * TICK_MS as f32 / 1000.0;
+    }
+    // Sum each player's attraction before moving an enemy, independent of map order.
+    for enemy in &mut world.enemies {
+        if enemy.knock_x.hypot(enemy.knock_y) > 8.0 {
+            continue;
+        }
+        let (mut pull_x, mut pull_y) = (0.0, 0.0);
+        for player in players.values() {
+            let power = player
+                .state
+                .build
+                .attachments
+                .iter()
+                .filter(|a| a.part_id == "magnet")
+                .count() as f32
+                * 60.0;
+            let dx = player.state.x - enemy.x;
+            let dy = player.state.y - enemy.y;
+            let distance = dx.hypot(dy);
+            let step = magnet_pull_distance(
+                power,
+                distance,
+                42.0 + enemy.size * 0.5 + 24.0,
+                TICK_MS as f32,
+            );
+            if step > 0.0 {
+                pull_x += dx / distance * step;
+                pull_y += dy / distance * step;
+            }
+        }
+        enemy.x += pull_x;
+        enemy.y += pull_y;
+        enemy.home_x += pull_x;
+        enemy.home_y += pull_y;
     }
     for player in players.values_mut() {
         if now.saturating_sub(player.last_damage) > 5000
@@ -498,6 +575,7 @@ async fn tick_world(room: &Room) {
             }
         }
     }
+    collide_enemies(&mut world, &previous_positions);
     update_projectiles(&mut world, &players);
     let mut destroyed = 0u64;
     world.enemies.retain(|enemy| {
@@ -525,7 +603,23 @@ async fn tick_world(room: &Room) {
             contacts.insert(key, now);
             player.state.health = (player.state.health - enemy.contact_damage).max(0.0);
             player.last_damage = now;
-            enemy.health -= build_ram_damage(&player.state.build);
+            let ram = build_ram_damage(&player.state.build);
+            enemy.health -= if ram > 8.0 {
+                ram.min((enemy.max_health * 0.3).ceil().max(1.0))
+            } else {
+                ram
+            };
+            if enemy.health > 0.0 {
+                let strength =
+                    smasher_knockback(build_ram_damage(&player.state.build), player.impact_speed);
+                let dx = enemy.x - player.state.x;
+                let dy = enemy.y - player.state.y;
+                let distance = dx.hypot(dy);
+                if strength > 0.0 && distance > 0.0 {
+                    enemy.knock_x = dx / distance * strength;
+                    enemy.knock_y = dy / distance * strength;
+                }
+            }
             if player.state.health <= 0.0 {
                 player.state.x = 0.0;
                 player.state.y = 0.0;
@@ -775,7 +869,7 @@ fn spawn_enemy(world: &mut World, cx: f32, cy: f32) {
     let (v, size, speed, roam, hp_scale, damage_scale) = variants[index];
     let level = rng.random_range(0..3) as u8;
     let base_hp = [24.0, 52.0, 95.0][level as usize];
-    let base_damage = [4.0, 9.0, 16.0][level as usize];
+    let base_damage = [2.0, 4.5, 8.0][level as usize];
     let angle = rng.random_range(0.0..std::f32::consts::TAU);
     let radius = rng.random_range(330.0..1300.0);
     world.next_id += 1;
@@ -796,6 +890,8 @@ fn spawn_enemy(world: &mut World, cx: f32, cy: f32) {
         roam,
         phase: rng.random_range(0.0..std::f32::consts::TAU),
         contact_damage: base_damage * damage_scale,
+        knock_x: 0.0,
+        knock_y: 0.0,
     });
 }
 
@@ -888,6 +984,244 @@ pub fn valid_build(build: &TankBuild) -> bool {
                 && a.layer < 2
         })
 }
+type Point = (f32, f32);
+fn enemy_outline(enemy: &Enemy) -> Vec<Point> {
+    let r = enemy.size * 0.5;
+    match enemy.variant.as_str() {
+        "dart" => vec![
+            (r, 0.0),
+            (-r * 0.72, -r * 0.72),
+            (-r * 0.42, 0.0),
+            (-r * 0.72, r * 0.72),
+        ],
+        "kite" | "honey" => {
+            let sides = if enemy.variant == "kite" { 4 } else { 6 };
+            (0..sides)
+                .map(|i| {
+                    let angle = -std::f32::consts::FRAC_PI_2
+                        + i as f32 * std::f32::consts::TAU / sides as f32;
+                    (angle.cos() * r, angle.sin() * r)
+                })
+                .collect()
+        }
+        "chunk" => {
+            let corner = r * 0.3;
+            let mut points = Vec::new();
+            for (x, y, start) in [
+                (r - corner, r - corner, 0.0),
+                (-r + corner, r - corner, 90.0),
+                (-r + corner, -r + corner, 180.0),
+                (r - corner, -r + corner, 270.0),
+            ] {
+                for i in 0..=4 {
+                    let angle = (start + i as f32 * 22.5).to_radians();
+                    points.push((x + angle.cos() * corner, y + angle.sin() * corner));
+                }
+            }
+            points
+        }
+        "loaf" => (0..26)
+            .map(|i| {
+                let right = i < 13;
+                let angle = (if right {
+                    -std::f32::consts::FRAC_PI_2
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                }) + (i % 13) as f32 * std::f32::consts::PI / 12.0;
+                (
+                    (if right { 1.0 } else { -1.0 }) * r * 0.38 + angle.cos() * r * 0.62,
+                    angle.sin() * r * 0.62,
+                )
+            })
+            .collect(),
+        _ => (0..24)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 24.0;
+                (angle.cos() * r, angle.sin() * r)
+            })
+            .collect(),
+    }
+}
+fn polygon_separation(a: &[Point], b: &[Point]) -> Option<Point> {
+    let mut depth = f32::INFINITY;
+    let mut normal = (0.0, 0.0);
+    for points in [a, b] {
+        for i in 0..points.len() {
+            let p = points[i];
+            let q = points[(i + 1) % points.len()];
+            let length = (q.0 - p.0).hypot(q.1 - p.1);
+            if length < 0.001 {
+                continue;
+            }
+            let axis = (-(q.1 - p.1) / length, (q.0 - p.0) / length);
+            let project = |poly: &[Point]| {
+                poly.iter()
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), p| {
+                        let v = p.0 * axis.0 + p.1 * axis.1;
+                        (min.min(v), max.max(v))
+                    })
+            };
+            let (amin, amax) = project(a);
+            let (bmin, bmax) = project(b);
+            let left = bmax - amin;
+            let right = amax - bmin;
+            if left <= 0.0 || right <= 0.0 {
+                return None;
+            }
+            let signed = if left < right { left } else { -right };
+            if signed.abs() < depth {
+                depth = signed.abs();
+                normal = (axis.0 * signed, axis.1 * signed);
+            }
+        }
+    }
+    Some(normal)
+}
+fn enemy_separation(a: &Enemy, b: &Enemy) -> Option<Point> {
+    let pieces = |enemy: &Enemy| {
+        let p = enemy_outline(enemy);
+        let pieces = if enemy.variant == "dart" {
+            vec![vec![p[0], p[1], p[2]], vec![p[0], p[2], p[3]]]
+        } else {
+            vec![p]
+        };
+        pieces
+            .into_iter()
+            .map(|poly| {
+                poly.into_iter()
+                    .map(|p| (p.0 + enemy.x, p.1 + enemy.y))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut result: Option<Point> = None;
+    for pa in pieces(a) {
+        for pb in pieces(b) {
+            if let Some(offset) = polygon_separation(&pa, &pb)
+                && result.is_none_or(|v| offset.0.hypot(offset.1) > v.0.hypot(v.1))
+            {
+                result = Some(offset);
+            }
+        }
+    }
+    result
+}
+fn shape_impact_damage(speed: f32, health: f32) -> f32 {
+    if speed < 60.0 {
+        0.0
+    } else {
+        (health * 0.3).ceil().min((speed / 18.0).round().max(2.0))
+    }
+}
+fn collide_enemies(world: &mut World, previous: &HashMap<String, Point>) {
+    let mut velocities: HashMap<String, Point> = world
+        .enemies
+        .iter()
+        .map(|e| {
+            let p = previous.get(&e.id).copied().unwrap_or((e.x, e.y));
+            (
+                e.id.clone(),
+                (
+                    (e.x - p.0) * 1000.0 / TICK_MS as f32,
+                    (e.y - p.1) * 1000.0 / TICK_MS as f32,
+                ),
+            )
+        })
+        .collect();
+    world
+        .contacts
+        .retain(|_, last| world.elapsed.saturating_sub(*last) < 1000);
+    for i in 0..world.enemies.len() {
+        for j in i + 1..world.enemies.len() {
+            let (left, right) = world.enemies.split_at_mut(j);
+            let a = &mut left[i];
+            let b = &mut right[0];
+            if a.health <= 0.0
+                || b.health <= 0.0
+                || distance(a.x, a.y, b.x, b.y)
+                    > (a.size + b.size) * std::f32::consts::FRAC_1_SQRT_2
+            {
+                continue;
+            }
+            let Some(offset) = enemy_separation(a, b) else {
+                continue;
+            };
+            let depth = offset.0.hypot(offset.1);
+            if depth < 0.001 {
+                continue;
+            }
+            let n = (offset.0 / depth, offset.1 / depth);
+            let av = velocities[&a.id];
+            let bv = velocities[&b.id];
+            let closing = (bv.0 - av.0) * n.0 + (bv.1 - av.1) * n.1;
+            for (enemy, sign) in [(&mut *a, 0.51), (&mut *b, -0.51)] {
+                enemy.x += offset.0 * sign;
+                enemy.y += offset.1 * sign;
+                enemy.home_x += offset.0 * sign;
+                enemy.home_y += offset.1 * sign;
+            }
+            if closing <= 0.0 {
+                continue;
+            }
+            let impulse = closing * 0.8;
+            a.knock_x += n.0 * impulse;
+            a.knock_y += n.1 * impulse;
+            b.knock_x -= n.0 * impulse;
+            b.knock_y -= n.1 * impulse;
+            velocities.insert(a.id.clone(), (av.0 + n.0 * impulse, av.1 + n.1 * impulse));
+            velocities.insert(b.id.clone(), (bv.0 - n.0 * impulse, bv.1 - n.1 * impulse));
+            let key = format!("shape:{}:{}", a.id, b.id);
+            if world
+                .contacts
+                .get(&key)
+                .is_some_and(|last| world.elapsed.saturating_sub(*last) < 520)
+            {
+                continue;
+            }
+            let da = shape_impact_damage(closing, a.max_health);
+            let db = shape_impact_damage(closing, b.max_health);
+            if da > 0.0 || db > 0.0 {
+                world.contacts.insert(key, world.elapsed);
+                a.health -= da;
+                b.health -= db;
+            }
+        }
+    }
+}
+
+fn smasher_knockback(ram_damage: f32, speed: f32) -> f32 {
+    if ram_damage <= 8.0 || speed < 30.0 {
+        return 0.0;
+    }
+    let impact = (speed / 170.0).clamp(0.0, 1.0);
+    (220.0 * ((ram_damage - 8.0) / 28.0).sqrt()).min(480.0) * (0.3 + 0.7 * impact)
+}
+
+fn wander_noise(step: f32, seed: f32) -> f32 {
+    let hash = |index: f32| {
+        let value = (index as f64 * 127.1 + seed as f64 * 311.7).sin() * 43758.5453;
+        ((value - value.floor()) * 2.0 - 1.0) as f32
+    };
+    let index = step.floor();
+    let fraction = step - index;
+    let blend = fraction * fraction * (3.0 - 2.0 * fraction);
+    hash(index) + (hash(index + 1.0) - hash(index)) * blend
+}
+
+fn magnet_pull_distance(power: f32, distance: f32, stop_radius: f32, delta_ms: f32) -> f32 {
+    if power <= 0.0 || distance <= stop_radius {
+        return 0.0;
+    }
+    let strength = (power / 60.0).sqrt();
+    let range = stop_radius + 240.0 * strength;
+    if distance >= range {
+        return 0.0;
+    }
+    let speed =
+        150.0 * strength * (0.25 + 0.75 * (1.0 - (distance - stop_radius) / (range - stop_radius)));
+    (distance - stop_radius).min(speed * delta_ms.clamp(0.0, 50.0) / 1000.0)
+}
+
 fn build_armor(build: &TankBuild) -> f32 {
     70.0 + build
         .attachments
@@ -945,6 +1279,19 @@ mod tests {
         }
     }
     #[test]
+    fn magnets_pull_only_within_reach_and_stack() {
+        assert_eq!(magnet_pull_distance(0.0, 200.0, 42.0, 33.0), 0.0);
+        assert_eq!(magnet_pull_distance(60.0, 300.0, 42.0, 33.0), 0.0);
+        assert_eq!(magnet_pull_distance(60.0, 42.0, 42.0, 33.0), 0.0);
+        assert!(magnet_pull_distance(60.0, 200.0, 42.0, 33.0) > 0.0);
+        assert!(magnet_pull_distance(240.0, 400.0, 42.0, 33.0) > 0.0);
+        assert!(
+            magnet_pull_distance(240.0, 200.0, 42.0, 33.0)
+                > magnet_pull_distance(60.0, 200.0, 42.0, 33.0)
+        );
+        assert!(magnet_pull_distance(60.0, 42.1, 42.0, 33.0) <= 0.101);
+    }
+    #[test]
     fn room_codes_are_easy_to_share_and_normalized() {
         for _ in 0..100 {
             let id = generate_room_id();
@@ -984,6 +1331,8 @@ mod tests {
                 firing: true,
                 last_fire: HashMap::new(),
                 last_damage: 0,
+                impact_speed: 0.0,
+                last_state_received: std::time::Instant::now(),
             },
         );
         for _ in 0..8 {
@@ -1016,6 +1365,8 @@ mod tests {
                 firing: true,
                 last_fire: HashMap::new(),
                 last_damage: 0,
+                impact_speed: 0.0,
+                last_state_received: std::time::Instant::now(),
             },
         );
         room.world.lock().await.enemies.push(Enemy {
@@ -1033,6 +1384,8 @@ mod tests {
             roam: 0.0,
             phase: 0.0,
             contact_damage: 0.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
         });
         for _ in 0..12 {
             tick_world(&room).await;
@@ -1041,6 +1394,121 @@ mod tests {
         assert!(!world.enemies.iter().any(|enemy| enemy.id == "target"));
         assert!(world.stats.blocks >= 1);
         assert!(world.stats.hits >= 1);
+    }
+    #[tokio::test]
+    async fn smasher_impacts_push_stationary_enemies_and_decay() {
+        let room = Room::new();
+        let (tx, _) = mpsc::channel(4);
+        let mut smasher = build();
+        smasher.attachments[0].part_id = "spike".into();
+        let state = PlayerState {
+            id: "one".into(),
+            build: smasher,
+            x: 0.0,
+            y: 0.0,
+            rotation: 0.0,
+            health: 70.0,
+            max_health: 70.0,
+        };
+        room.players.lock().await.insert(
+            "one".into(),
+            ConnectedPlayer {
+                state,
+                sender: tx,
+                firing: false,
+                last_fire: HashMap::new(),
+                last_damage: 0,
+                impact_speed: 170.0,
+                last_state_received: std::time::Instant::now(),
+            },
+        );
+        room.world.lock().await.enemies.push(Enemy {
+            id: "target".into(),
+            variant: "bubble".into(),
+            level: 0,
+            x: 50.0,
+            y: 0.0,
+            home_x: 50.0,
+            home_y: 0.0,
+            health: 28.0,
+            max_health: 28.0,
+            size: 42.0,
+            speed: 0.0,
+            roam: 0.0,
+            phase: 0.0,
+            contact_damage: 0.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
+        });
+        room.world.lock().await.elapsed = 600;
+        tick_world(&room).await;
+        {
+            let world = room.world.lock().await;
+            let enemy = world
+                .enemies
+                .iter()
+                .find(|enemy| enemy.id == "target")
+                .unwrap();
+            assert!(enemy.knock_x > 0.0);
+            assert!(enemy.health > 0.0 && enemy.health < enemy.max_health);
+            assert_eq!(enemy.knock_y, 0.0);
+        }
+        for _ in 0..12 {
+            tick_world(&room).await;
+        }
+        let world = room.world.lock().await;
+        let enemy = world
+            .enemies
+            .iter()
+            .find(|enemy| enemy.id == "target")
+            .unwrap();
+        assert!(enemy.x > 70.0);
+        assert!(enemy.knock_x < smasher_knockback(36.0, 170.0));
+        assert_eq!(enemy.x, enemy.home_x);
+    }
+    #[test]
+    fn shapes_transfer_momentum_and_damage_without_passive_contact_damage() {
+        let enemy = |id: &str, x: f32| Enemy {
+            id: id.into(),
+            variant: "chunk".into(),
+            level: 0,
+            x,
+            y: 0.0,
+            home_x: x,
+            home_y: 0.0,
+            health: 28.0,
+            max_health: 28.0,
+            size: 58.0,
+            speed: 0.0,
+            roam: 0.0,
+            phase: 0.0,
+            contact_damage: 0.0,
+            knock_x: 0.0,
+            knock_y: 0.0,
+        };
+        let mut world = World {
+            elapsed: 1000,
+            enemies: vec![enemy("a", 0.0), enemy("b", 56.0)],
+            ..World::default()
+        };
+        let previous = HashMap::from([("a".into(), (-6.0, 0.0)), ("b".into(), (56.0, 0.0))]);
+        collide_enemies(&mut world, &previous);
+        assert!(
+            world
+                .enemies
+                .iter()
+                .all(|e| e.health > 0.0 && e.health < e.max_health)
+        );
+        assert!(world.enemies[1].knock_x > 0.0);
+        assert!(world.enemies[1].x - world.enemies[0].x >= 58.0);
+        let mut resting = World {
+            elapsed: 1000,
+            enemies: vec![enemy("a", 0.0), enemy("b", 56.0)],
+            ..World::default()
+        };
+        let previous = HashMap::from([("a".into(), (0.0, 0.0)), ("b".into(), (56.0, 0.0))]);
+        collide_enemies(&mut resting, &previous);
+        assert!(resting.enemies.iter().all(|e| e.health == e.max_health));
     }
     async fn next_type<S>(socket: &mut S, wanted: &str) -> serde_json::Value
     where

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { copyBuild } from './buildLibrary';
 import { persist } from 'zustand/middleware';
 import { DEFAULT_BUILD, MountIndex, TankBuild, attachPart, migrateBuild, randomBuild, removeAttachment, replaceAttachment } from './game/config';
 import { repairedHealth } from './game/combat';
@@ -7,12 +8,17 @@ import { normalizeCameraZoom } from './game/world';
 type Metrics = { blocks: number; shots: number; hits: number };
 type GameStore = {
   build: TankBuild;
+  loadBuild: (build:TankBuild) => void;
   mode: 'workshop' | 'yard';
   metrics: Metrics;
   position: { x: number; y: number };
   health: number;
   maxHealth: number;
   cameraZoom: number;
+  autoSpin: boolean;
+  autoShoot: boolean;
+  toggleAutoSpin: () => void;
+  toggleAutoShoot: () => void;
   attach: (partId: string, mount: MountIndex) => boolean;
   remove: (uid: string) => void;
   replace: (uid: string, partId: string) => void;
@@ -34,12 +40,17 @@ type GameStore = {
 
 export const useGameStore = create<GameStore>()(persist((set, get) => ({
   build: DEFAULT_BUILD,
+  loadBuild: (build) => set({build:copyBuild(build)}),
   mode: 'workshop',
   metrics: { blocks: 0, shots: 0, hits: 0 },
   position: { x: 0, y: 0 },
   health: 70,
   maxHealth: 70,
   cameraZoom: 1,
+  autoSpin: false,
+  autoShoot: false,
+  toggleAutoSpin: () => set(state => ({ autoSpin: !state.autoSpin })),
+  toggleAutoShoot: () => set(state => ({ autoShoot: !state.autoShoot })),
   attach: (partId, mount) => {
     const build = get().build;
     const next = attachPart(build, partId, mount);

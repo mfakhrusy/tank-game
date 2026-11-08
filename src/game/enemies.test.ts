@@ -25,7 +25,20 @@ describe('enemy variety',()=>{
     const returning=enemyVelocity(1000,enemyVariant(4),0,500,0,0,0);
     expect(returning.x).toBeLessThan(0);expect(Math.abs(returning.y)).toBeLessThan(1);
     const roaming=enemyVelocity(1000,enemyVariant(4),1,0,0,0,0);
-    expect(Math.hypot(roaming.x,roaming.y)).toBeCloseTo(enemyVariant(4).moveSpeed);
+    expect(Math.hypot(roaming.x,roaming.y)).toBeGreaterThan(0);
+    expect(Math.hypot(roaming.x,roaming.y)).toBeLessThanOrEqual(enemyVariant(4).moveSpeed*1.62);
+  });
+
+  it('varies speed and direction with individual timing while staying continuous',()=>{
+    for(const index of [0,2,4]){
+      const variant=enemyVariant(index);
+      const samples=Array.from({length:80},(_,i)=>enemyVelocity(i*400,variant,1.3,0,0,0,0));
+      const speeds=samples.map(v=>Math.hypot(v.x,v.y));
+      expect(Math.max(...speeds)-Math.min(...speeds)).toBeGreaterThan(variant.moveSpeed*.25);
+      const a=enemyVelocity(1700,variant,1.3,0,0,0,0),b=enemyVelocity(1701,variant,1.3,0,0,0,0);
+      expect(Math.hypot(a.x-b.x,a.y-b.y)).toBeLessThan(2);
+      expect(enemyVelocity(1700,variant,3.2,0,0,0,0)).not.toEqual(a);
+    }
   });
 
   it('blends back toward home without snapping at the roam boundary',()=>{
@@ -33,7 +46,7 @@ describe('enemy variety',()=>{
     const justInside=enemyVelocity(time,dart,phase,dart.roamRadius-1,0,0,0);
     const justOutside=enemyVelocity(time,dart,phase,dart.roamRadius+1,0,0,0);
     expect(Math.hypot(justInside.x-justOutside.x,justInside.y-justOutside.y)).toBeLessThan(4);
-    expect(Math.hypot(justInside.x,justInside.y)).toBeCloseTo(dart.moveSpeed);
+    expect(Math.abs(Math.hypot(justInside.x,justInside.y)-dart.moveSpeed)).toBeLessThan(4);
     expect(Math.hypot(justOutside.x,justOutside.y)).toBeCloseTo(dart.moveSpeed);
   });
 });

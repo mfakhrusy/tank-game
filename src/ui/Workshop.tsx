@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BuildLibrary } from './BuildLibrary';
 import { Dices, Play, Sparkles, Trash2, X } from 'lucide-react';
 import { MountIndex, PARTS, PartKind, buildCost, getPart, nextLayerAt } from '../game/config';
 import { useGameStore } from '../store';
@@ -88,6 +89,7 @@ export function Workshop() {
         </div>
         <div className="paint-row"><span>Core</span>{['#5b7cfa','#ff725e','#30b27a','#936ee8','#f08a24'].map(color=><button aria-label={`Paint ${color}`} key={color} className={build.color===color?'active':''} onClick={()=>setColor(color)} style={{background:color}}/>)}</div>
         <button className="launch-button" onClick={launch}><Play fill="currentColor"/> Test this thing! <Sparkles size={18}/></button>
+        <BuildLibrary onLoad={()=>{setSwapUid(null);setMessage('Build loaded. Ready to customize!');}}/>
         <p className="controls-hint"><kbd>WASD</kbd> or arrows to move<br/>Mouse to aim · Hold to fire everything</p>
       </aside>
     </section>
