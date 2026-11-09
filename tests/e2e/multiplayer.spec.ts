@@ -167,7 +167,7 @@ test('a multiplayer tank stops at a visible shape and receives server contact da
   await page.getByRole('button', { name: 'Leave room', exact: true }).click();
 });
 
-test('multiplayer renders the authoritative railgun beam', async ({ page }) => {
+test('multiplayer mixed weapons keep aged railgun snapshots visible', async ({ page }) => {
   await page.route('**/src/game/TestScene.ts*', async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -179,7 +179,11 @@ test('multiplayer renders the authoritative railgun beam', async ({ page }) => {
       TestScene.prototype.syncNetworkProjectiles=function(frame){
         render.call(this,frame);
         for(const entry of this.networkProjectiles.values()){
-          if(entry.image.texture.key==='rail-beam')window.__railBeamWidth=entry.image.displayWidth;
+          if(entry.image.texture.key==='rail-beam'){
+            window.__railBeamWidth=entry.image.displayWidth;
+            window.__railVisibleAlpha=Math.max(window.__railVisibleAlpha??0,entry.image.alpha);
+          }
+          if(entry.image.texture.key==='bullet')window.__sprinklerSeen=true;
         }
       };
     `,
@@ -189,10 +193,16 @@ test('multiplayer renders the authoritative railgun beam', async ({ page }) => {
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await page.getByRole('button', { name: /Railgun/ }).click();
   await page.getByRole('button', { name: 'Socket 1, 0 of 2 layers' }).click();
+  await page.getByRole('button', { name: /Sprinkler/ }).click();
+  await page.getByRole('button', { name: 'Socket 2, 0 of 2 layers' }).click();
   await page.getByRole('button', { name: /Test this thing/ }).click();
   await page.getByRole('button', { name: 'Create a room', exact: true }).click();
   await expect(page.getByText('1 player connected')).toBeVisible();
   await page.getByRole('button', { name: /Auto shoot/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__sprinklerSeen)).toBe(true);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__railVisibleAlpha ?? 0))
+    .toBeGreaterThan(0.8);
   await expect.poll(() => page.evaluate(() => (window as any).__railBeamWidth)).toBe(1100);
   await page.getByRole('button', { name: /Auto shoot/ }).click();
   await page.getByRole('button', { name: 'Leave room', exact: true }).click();

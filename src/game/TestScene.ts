@@ -171,7 +171,13 @@ export class TestScene extends Phaser.Scene {
   >();
   private networkProjectiles = new Map<
     string,
-    { image: Phaser.GameObjects.Image; targetX: number; targetY: number; targetRotation: number }
+    {
+      image: Phaser.GameObjects.Image;
+      targetX: number;
+      targetY: number;
+      targetRotation: number;
+      shownAt: number;
+    }
   >();
   private multiplayerActive = false;
 
@@ -940,7 +946,13 @@ export class TestScene extends Phaser.Scene {
             .setOrigin(0, 0.5)
             .setDisplaySize(projectile.length ?? 1100, 16)
             .clearTint();
-        current = { image, targetX: position.x, targetY: position.y, targetRotation: rotation };
+        current = {
+          image,
+          targetX: position.x,
+          targetY: position.y,
+          targetRotation: rotation,
+          shownAt: this.time.now,
+        };
         this.networkProjectiles.set(projectile.id, current);
       }
       current.image.setPosition(position.x, position.y).setRotation(rotation);
@@ -958,10 +970,9 @@ export class TestScene extends Phaser.Scene {
           .setAlpha(Math.pow(1 - progress, 0.7) * 0.9);
       }
       if (projectile.behavior === 'railgun') {
-        const age =
-          (projectile.ageMs ?? 0) +
-          ((next?.ageMs ?? projectile.ageMs ?? 0) - (projectile.ageMs ?? 0)) * frame.alpha;
-        current.image.setAlpha(Math.max(0, 1 - age / 70));
+        // Snapshot delivery can already exceed the solo beam's entire flash duration.
+        // Start the visual flash on first observation; damage remains server authoritative.
+        current.image.setAlpha(Math.max(0, 1 - (this.time.now - current.shownAt) / 120));
       }
     }
     for (const [id, projectile] of this.networkProjectiles)
